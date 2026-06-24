@@ -1,0 +1,1667 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#16202e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="プレス日報">
+<meta name="mobile-web-app-capable" content="yes">
+<title>プレス日報</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --steel:#eef1f5;
+    --surface:#ffffff;
+    --surface2:#f4f6f9;
+    --line:#d9dfe7;
+    --line2:#c5cdd8;
+    --ink:#16202e;
+    --ink2:#5a6677;
+    --ink3:#8a94a3;
+    --orange:#d4640a;
+    --orange-d:#b8550a;
+    --run:#1e8a3e;
+    --run-d:#176e31;
+    --run-bg:#eaf6ee;
+    --stop:#c0392b;
+    --stop-d:#a32c20;
+    --stop-bg:#fbecea;
+    --pause:#b5790a;
+    --pause-d:#8c5d06;
+    --pause-bg:#fdf3e0;
+    --blue:#1a6fc4;
+    --mono:'JetBrains Mono',monospace;
+    --sans:'Noto Sans JP',system-ui,sans-serif;
+    --safe-b:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    font-family:var(--sans);
+    background:var(--steel);
+    color:var(--ink);
+    font-size:15px;
+    line-height:1.5;
+    overscroll-behavior-y:none;
+  }
+  button{font-family:var(--sans);cursor:pointer;border:none;background:none;}
+  input{font-family:var(--sans);}
+
+  /* ── Header ── */
+  header{
+    background:var(--ink);
+    color:#fff;
+    padding:calc(10px + env(safe-area-inset-top,0px)) 16px 10px;
+    display:flex;align-items:center;justify-content:space-between;
+    position:sticky;top:0;z-index:50;
+  }
+  header .brand{display:flex;align-items:center;gap:9px;}
+  header .mark{
+    width:26px;height:26px;border-radius:7px;background:var(--orange);
+    display:grid;place-items:center;font-size:15px;flex-shrink:0;
+  }
+  header h1{font-size:16px;font-weight:900;letter-spacing:.04em;}
+  header .clock{font-family:var(--mono);font-size:12px;color:#aab4c2;font-weight:500;text-align:right;}
+
+  /* ── Tabs ── */
+  .tabs{
+    display:flex;background:var(--surface);
+    border-bottom:1px solid var(--line);
+    position:sticky;top:0;z-index:40;
+  }
+  header + .tabs{top:calc(46px + env(safe-area-inset-top,0px));}
+  .tab{
+    flex:1;padding:13px 6px;text-align:center;font-size:13px;font-weight:700;
+    color:var(--ink3);border-bottom:3px solid transparent;transition:color .12s;
+  }
+  .tab .ic{font-size:17px;display:block;margin-bottom:2px;}
+  .tab.active{color:var(--orange);border-bottom-color:var(--orange);}
+  .page{display:none;padding:16px 14px calc(40px + var(--safe-b));max-width:620px;margin:0 auto;}
+  .page.active{display:block;}
+
+  /* ── Step blocks ── */
+  .step{margin-bottom:14px;}
+  .step-head{display:flex;align-items:center;gap:9px;margin:0 2px 9px;}
+  .step-num{
+    width:24px;height:24px;border-radius:7px;background:var(--ink);color:#fff;
+    font-family:var(--mono);font-weight:700;font-size:13px;display:grid;place-items:center;flex-shrink:0;
+  }
+  .step-title{font-size:14px;font-weight:700;color:var(--ink);}
+  .step-hint{font-size:12px;color:var(--ink3);font-weight:500;margin-left:auto;}
+
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;}
+
+  /* ── Machine grid ── */
+  .machine-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;}
+  .machine-btn{
+    background:var(--surface);border:2px solid var(--line);border-radius:13px;
+    padding:13px 12px;text-align:left;min-height:62px;
+    display:flex;flex-direction:column;gap:2px;transition:transform .08s,border-color .12s,background .12s;
+  }
+  .machine-btn:active{transform:scale(.97);}
+  .machine-btn .m-id{font-family:var(--mono);font-weight:700;font-size:16px;color:var(--ink);}
+  .machine-btn .m-name{font-size:12px;color:var(--ink2);}
+  .machine-btn.sel{border-color:var(--orange);background:#fff7f0;}
+  .machine-btn.sel .m-id{color:var(--orange-d);}
+  .machine-btn.busy{border-color:var(--run);background:var(--run-bg);}
+  .machine-btn.paused{border-color:var(--pause);background:var(--pause-bg);}
+  .machine-btn .m-tag{
+    font-size:10px;font-weight:700;letter-spacing:.04em;margin-top:3px;
+    display:inline-flex;align-items:center;gap:4px;color:var(--run-d);
+  }
+  .machine-btn .m-tag.pause{color:var(--pause-d);}
+  .machine-btn .m-tag .d{width:6px;height:6px;border-radius:50%;background:var(--run);animation:pulse 1.4s infinite;}
+  .machine-btn .m-tag.pause .d{background:var(--pause);}
+  .machine-empty{
+    grid-column:1/-1;text-align:center;color:var(--ink3);font-size:13px;
+    padding:18px;border:1.5px dashed var(--line2);border-radius:13px;
+  }
+
+  /* ── Scan section ── */
+  .scan-card{padding:14px;}
+  .scanned{
+    background:var(--surface2);border:1px solid var(--line);border-radius:11px;
+    padding:12px 14px;margin-bottom:11px;
+  }
+  .scanned.empty{border-style:dashed;text-align:center;color:var(--ink3);font-size:13px;padding:16px;}
+  .scanned .sc-part{font-family:var(--mono);font-weight:700;font-size:19px;color:var(--ink);word-break:break-all;}
+  .scanned .sc-name{font-size:13px;color:var(--ink2);margin-top:1px;}
+  .scanned .sc-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+  .sc-pill{
+    font-size:11px;font-weight:600;background:#fff;border:1px solid var(--line);
+    border-radius:20px;padding:3px 9px;color:var(--ink2);
+  }
+  .sc-pill b{color:var(--blue);font-weight:700;}
+  .btn-scan{
+    width:100%;min-height:56px;border-radius:12px;background:var(--ink);color:#fff;
+    font-size:16px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:10px;
+    transition:transform .08s,background .12s;
+  }
+  .btn-scan:active{transform:scale(.98);background:#0d1620;}
+  .btn-scan .cam{font-size:22px;}
+  .manual{display:flex;gap:8px;margin-top:10px;align-items:center;}
+  .manual::before{content:"または手入力";font-size:11px;color:var(--ink3);white-space:nowrap;}
+  .manual input{
+    flex:1;background:var(--surface2);border:1px solid var(--line);border-radius:10px;
+    padding:11px 12px;font-size:15px;font-family:var(--mono);color:var(--ink);
+  }
+  .manual input:focus{outline:none;border-color:var(--orange);}
+
+  /* ── Status panel (signature) ── */
+  .status{border-radius:16px;overflow:hidden;border:1px solid var(--line);background:var(--surface);}
+  .status.idle .st-strip{background:var(--surface2);color:var(--ink3);}
+  .status.running{border-color:var(--run);}
+  .status.running .st-strip{background:var(--run);color:#fff;}
+  .status.stopped{border-color:var(--pause);}
+  .status.stopped .st-strip{background:var(--pause);color:#fff;}
+  .st-strip{padding:10px 16px;font-size:13px;font-weight:700;letter-spacing:.05em;display:flex;align-items:center;gap:8px;}
+  .st-strip .d{width:9px;height:9px;border-radius:50%;background:#fff;animation:pulse 1.3s infinite;}
+  .st-body{padding:18px 16px 20px;text-align:center;}
+  .timer{
+    font-family:var(--mono);font-weight:700;font-size:54px;line-height:1;letter-spacing:.01em;
+    color:var(--run-d);font-variant-numeric:tabular-nums;
+  }
+  .timer.paused{color:var(--pause-d);}
+  .timer-sub{font-size:12px;color:var(--ink2);margin-top:8px;font-weight:500;}
+  .timer-sub b{font-family:var(--mono);color:var(--ink);font-weight:700;}
+  .stop-reason-tag{
+    display:inline-block;margin-top:10px;background:var(--pause-bg);border:1px solid var(--pause);
+    color:var(--pause-d);font-size:13px;font-weight:700;border-radius:20px;padding:5px 14px;
+  }
+  .idle-msg{font-size:15px;color:var(--ink2);padding:8px 0 18px;font-weight:500;}
+  .idle-msg .em{font-size:32px;display:block;margin-bottom:6px;opacity:.5;}
+
+  .btn-big{
+    width:100%;min-height:66px;border-radius:14px;font-size:20px;font-weight:900;letter-spacing:.06em;
+    color:#fff;display:flex;align-items:center;justify-content:center;gap:11px;
+    transition:transform .08s,background .12s,box-shadow .12s;
+  }
+  .btn-big .ic{font-size:24px;}
+  .btn-big:active{transform:scale(.985);}
+  .btn-start{background:var(--run);box-shadow:0 4px 14px rgba(30,138,62,.28);}
+  .btn-start:active{background:var(--run-d);}
+  .btn-start:disabled{background:var(--line2);color:#fff;box-shadow:none;opacity:.7;}
+  .btn-stop{background:var(--stop);box-shadow:0 4px 14px rgba(192,57,43,.28);}
+  .btn-stop:active{background:var(--stop-d);}
+  .btn-pause{background:var(--pause);box-shadow:0 4px 14px rgba(181,121,10,.26);}
+  .btn-pause:active{background:var(--pause-d);}
+  .btn-resume{background:var(--run);box-shadow:0 4px 14px rgba(30,138,62,.28);}
+  .btn-resume:active{background:var(--run-d);}
+  .btn-row{display:flex;gap:9px;}
+  .btn-row .btn-big{flex:1;font-size:18px;min-height:60px;letter-spacing:.04em;}
+  .btn-end-sm{background:var(--ink);}
+  .btn-end-sm:active{background:#0d1620;}
+  .lock-hint{font-size:12px;color:var(--ink3);text-align:center;margin-top:9px;}
+
+  /* ── Records ── */
+  .rec-bar{display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;}
+  .rec-filter{
+    flex:1;min-width:130px;background:var(--surface);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;font-size:14px;color:var(--ink);
+  }
+  .rec-filter:focus{outline:none;border-color:var(--orange);}
+  .btn-out{
+    background:var(--surface);border:1px solid var(--line2);border-radius:10px;padding:10px 13px;
+    font-size:13px;font-weight:700;color:var(--ink2);display:inline-flex;align-items:center;gap:5px;
+  }
+  .btn-out:active{background:var(--surface2);}
+  .mgroup{margin-bottom:16px;}
+  .mgroup-head{
+    display:flex;align-items:center;gap:8px;padding:0 4px 8px;
+  }
+  .mgroup-head .gid{font-family:var(--mono);font-weight:700;font-size:15px;color:var(--orange-d);}
+  .mgroup-head .gname{font-size:12px;color:var(--ink2);}
+  .mgroup-head .gcount{margin-left:auto;font-size:11px;color:var(--ink3);font-weight:600;}
+  .rec{
+    background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:12px 14px;margin-bottom:8px;
+  }
+  .rec.run{border-left:4px solid var(--run);}
+  .rec.paused{border-left:4px solid var(--pause);}
+  .rec-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+  .rec-part{font-family:var(--mono);font-weight:700;font-size:15px;color:var(--ink);word-break:break-all;}
+  .rec-pname{font-size:12px;color:var(--ink2);}
+  .rec-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap;flex-shrink:0;}
+  .rec-badge.done{background:#e9eef4;color:var(--blue);}
+  .rec-badge.run{background:var(--run-bg);color:var(--run-d);}
+  .rec-badge.paused{background:var(--pause-bg);color:var(--pause-d);}
+  .rec-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin-top:10px;}
+  .rec-cell .lab{font-size:10px;color:var(--ink3);font-weight:600;}
+  .rec-cell .val{font-size:14px;font-weight:700;color:var(--ink);font-family:var(--mono);}
+  .rec-cell .val.qty{color:var(--orange-d);font-size:17px;}
+  .rec-cell .val.stopval{color:var(--pause-d);}
+  .rec-stops{margin-top:9px;padding-top:9px;border-top:1px dashed var(--line);}
+  .rec-stops .sh-head{font-size:10px;color:var(--ink3);font-weight:700;margin-bottom:5px;letter-spacing:.03em;}
+  .rec-stop-line{font-size:12px;color:var(--ink2);display:flex;gap:7px;align-items:baseline;padding:1px 0;}
+  .rec-stop-line .r{font-weight:700;color:var(--pause-d);}
+  .rec-stop-line .t{font-family:var(--mono);font-size:11px;color:var(--ink3);margin-left:auto;white-space:nowrap;}
+  .rec-note{font-size:12px;color:var(--ink2);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);}
+  .rec-del{font-size:12px;color:var(--ink3);background:none;padding:6px 0 0;font-weight:600;}
+  .rec-del:active{color:var(--stop);}
+
+  /* ── Stop reason chips ── */
+  .chip-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;}
+  .chip{
+    padding:10px 14px;border-radius:11px;border:1.5px solid var(--line2);background:var(--surface2);
+    font-size:14px;font-weight:600;color:var(--ink2);transition:all .12s;flex:1 1 auto;text-align:center;min-width:88px;
+  }
+  .chip:active{transform:scale(.97);}
+  .chip.sel{border-color:var(--pause);background:var(--pause-bg);color:var(--pause-d);font-weight:700;}
+
+  /* ── Daily summary ── */
+  .day-nav{
+    display:flex;align-items:center;gap:10px;margin-bottom:12px;
+    background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:8px 10px;
+  }
+  .day-arrow{
+    width:42px;height:42px;border-radius:10px;background:var(--surface2);border:1px solid var(--line);
+    color:var(--ink);font-size:16px;flex-shrink:0;
+  }
+  .day-arrow:active{background:var(--line);}
+  .day-label{flex:1;text-align:center;font-size:16px;font-weight:700;color:var(--ink);padding:6px;}
+  .day-label:active{color:var(--orange);}
+  .day-meta{display:flex;gap:10px;margin-bottom:14px;}
+  .day-meta .dm{flex:1;background:var(--ink);color:#fff;border-radius:12px;padding:11px 14px;}
+  .day-meta .dm .lab{font-size:11px;color:#aab4c2;font-weight:600;}
+  .day-meta .dm .val{font-size:21px;font-weight:900;font-family:var(--mono);margin-top:2px;}
+  .day-meta .dm .val small{font-size:12px;font-weight:600;}
+  .sum-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:11px;}
+  .sum-head{display:flex;align-items:center;gap:8px;margin-bottom:11px;}
+  .sum-head .sid{font-family:var(--mono);font-weight:700;font-size:17px;color:var(--ink);}
+  .sum-head .sname{font-size:12px;color:var(--ink2);}
+  .sum-head .srate{
+    margin-left:auto;font-family:var(--mono);font-weight:700;font-size:15px;
+    color:var(--run-d);background:var(--run-bg);border-radius:20px;padding:3px 11px;
+  }
+  .sum-head .srate.low{color:var(--pause-d);background:var(--pause-bg);}
+  .sum-head .srate.none{color:var(--ink3);background:var(--surface2);}
+  .sum-bar{display:flex;height:16px;border-radius:8px;overflow:hidden;background:var(--surface2);border:1px solid var(--line);}
+  .sum-bar .seg{height:100%;transition:width .3s;}
+  .sum-bar .seg.run{background:var(--run);}
+  .sum-bar .seg.stop{background:var(--pause);}
+  .sum-bar .seg.remain{background:repeating-linear-gradient(45deg,#e3e8ef,#e3e8ef 5px,#eef1f5 5px,#eef1f5 10px);}
+  .sum-scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--ink3);margin-top:3px;padding:0 1px;}
+  .sum-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:13px;}
+  .ss{background:var(--surface2);border-radius:10px;padding:9px 8px;text-align:center;}
+  .ss .lab{font-size:10px;color:var(--ink3);font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;}
+  .ss .lab .dot{width:8px;height:8px;border-radius:2px;}
+  .ss .lab .dot.run{background:var(--run);}
+  .ss .lab .dot.stop{background:var(--pause);}
+  .ss .val{font-family:var(--mono);font-weight:700;font-size:15px;color:var(--ink);margin-top:3px;line-height:1.2;}
+  .ss .val.run{color:var(--run-d);}
+  .ss .val.stop{color:var(--pause-d);}
+  .ss .val.qty{color:var(--orange-d);}
+  .sum-reasons{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line);font-size:11px;color:var(--ink2);line-height:1.8;}
+  .sum-reasons .rh{font-size:10px;color:var(--ink3);font-weight:700;margin-right:4px;}
+  .sum-reasons .rr{display:inline-block;background:var(--pause-bg);color:var(--pause-d);border-radius:12px;padding:2px 9px;margin:2px 4px 2px 0;font-weight:600;}
+  .sum-jobs{font-size:11px;color:var(--ink3);margin-top:9px;}
+
+  /* ── Settings ── */
+  .set-card{padding:14px;margin-bottom:14px;}
+  .set-card h3{font-size:14px;font-weight:700;margin-bottom:12px;color:var(--ink);display:flex;align-items:center;gap:7px;}
+  .mset{
+    display:flex;align-items:center;gap:10px;padding:11px 12px;background:var(--surface2);
+    border:1px solid var(--line);border-radius:10px;margin-bottom:7px;
+  }
+  .mset .mi-id{font-family:var(--mono);font-weight:700;font-size:15px;color:var(--ink);}
+  .mset .mi-name{font-size:13px;color:var(--ink2);}
+  .mset .x{margin-left:auto;color:var(--ink3);font-size:20px;padding:2px 6px;line-height:1;}
+  .mset .x:active{color:var(--stop);}
+  .add-row{display:grid;grid-template-columns:1fr 1.3fr auto;gap:8px;margin-top:10px;}
+  .add-row input{
+    background:var(--surface2);border:1px solid var(--line);border-radius:10px;
+    padding:11px 12px;font-size:14px;color:var(--ink);min-width:0;
+  }
+  .add-row input:focus{outline:none;border-color:var(--orange);}
+  .add-row .mi{font-family:var(--mono);}
+  .btn-add{background:var(--orange);color:#fff;border-radius:10px;padding:0 16px;font-weight:700;font-size:14px;}
+  .btn-add:active{background:var(--orange-d);}
+  .danger-row{display:flex;gap:8px;flex-wrap:wrap;}
+  .btn-ghost-danger{
+    background:var(--surface);border:1px solid var(--stop);color:var(--stop);
+    border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;
+  }
+  .btn-ghost-danger:active{background:var(--stop-bg);}
+  .set-note{font-size:12px;color:var(--ink3);margin-top:10px;line-height:1.6;}
+
+  /* ── Scanner modal ── */
+  .scan-modal{display:none;position:fixed;inset:0;background:#000;z-index:200;flex-direction:column;}
+  .scan-modal.active{display:flex;}
+  .scan-modal video{width:100%;height:100%;object-fit:cover;position:absolute;inset:0;}
+  .scan-frame{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;}
+  .scan-frame .box{width:72%;max-width:320px;aspect-ratio:1.2/1;border:3px solid rgba(255,255,255,.9);border-radius:18px;box-shadow:0 0 0 9999px rgba(0,0,0,.45);}
+  .scan-frame .laser{position:absolute;width:72%;max-width:320px;height:2px;background:var(--orange);box-shadow:0 0 12px var(--orange);animation:scanline 2.2s ease-in-out infinite;}
+  @keyframes scanline{0%,100%{transform:translateY(-70px)}50%{transform:translateY(70px)}}
+  .scan-top{
+    position:absolute;top:0;left:0;right:0;padding:calc(14px + env(safe-area-inset-top,0px)) 16px 14px;
+    z-index:3;background:linear-gradient(rgba(0,0,0,.6),transparent);
+    display:flex;justify-content:space-between;align-items:center;
+  }
+  .scan-top .t{color:#fff;font-weight:700;font-size:15px;}
+  .scan-close{background:rgba(255,255,255,.18);color:#fff;width:38px;height:38px;border-radius:50%;font-size:20px;}
+  .scan-status{
+    position:absolute;bottom:calc(28px + var(--safe-b));left:0;right:0;text-align:center;z-index:3;
+    color:#fff;font-size:14px;font-weight:600;padding:0 24px;
+    text-shadow:0 1px 4px rgba(0,0,0,.7);
+  }
+
+  /* ── Generic modal (end qty / confirm) ── */
+  .ov{display:none;position:fixed;inset:0;background:rgba(15,22,33,.55);z-index:210;align-items:flex-end;justify-content:center;}
+  .ov.active{display:flex;}
+  .sheet{
+    background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:620px;
+    padding:8px 18px calc(26px + var(--safe-b));animation:up .22s ease-out;
+  }
+  @keyframes up{from{transform:translateY(100%)}to{transform:translateY(0)}}
+  .grab{width:38px;height:4px;background:var(--line2);border-radius:2px;margin:8px auto 16px;}
+  .sheet h3{font-size:18px;font-weight:900;margin-bottom:6px;}
+  .sheet p{font-size:14px;color:var(--ink2);margin-bottom:16px;line-height:1.6;}
+  .qty-recap{background:var(--surface2);border:1px solid var(--line);border-radius:11px;padding:11px 14px;margin-bottom:16px;font-size:13px;color:var(--ink2);}
+  .qty-recap b{font-family:var(--mono);color:var(--ink);font-weight:700;}
+  .qty-label{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:8px;display:block;}
+  .qty-input{
+    width:100%;background:var(--surface2);border:2px solid var(--line);border-radius:14px;
+    padding:16px;font-size:34px;font-weight:700;font-family:var(--mono);text-align:center;color:var(--ink);
+  }
+  .qty-input:focus{outline:none;border-color:var(--run);}
+  .note-input{
+    width:100%;background:var(--surface2);border:1px solid var(--line);border-radius:11px;
+    padding:11px 13px;font-size:14px;color:var(--ink);margin-top:11px;
+  }
+  .note-input:focus{outline:none;border-color:var(--orange);}
+  .sheet-actions{display:flex;gap:10px;margin-top:18px;}
+  .sheet-actions button{flex:1;min-height:52px;border-radius:13px;font-size:15px;font-weight:700;}
+  .b-cancel{background:var(--surface2);border:1px solid var(--line);color:var(--ink2);}
+  .b-ok{background:var(--run);color:#fff;}
+  .b-ok:active{background:var(--run-d);}
+  .b-ok.danger{background:var(--stop);}
+  .b-ok.danger:active{background:var(--stop-d);}
+  .b-ok.warn{background:var(--pause);}
+  .b-ok.warn:active{background:var(--pause-d);}
+  .carry-actions{display:flex;flex-direction:column;gap:10px;margin-top:18px;}
+  .carry-actions .b-ok{min-height:54px;border-radius:13px;font-size:16px;font-weight:700;color:#fff;}
+  .carry-finish{background:none;border:none;color:var(--ink2);font-size:13px;font-weight:600;padding:6px;text-decoration:underline;}
+  .carry-finish:active{color:var(--ink);}
+
+  /* ── Overnight (carry-over) state ── */
+  .machine-btn.over{border-color:#4a5fb0;background:#eef0fb;}
+  .machine-btn .m-tag.over{color:#384a8f;}
+  .machine-btn .m-tag.over .d{background:#4a5fb0;animation:none;}
+  .status.over{border-color:#4a5fb0;}
+  .status.over .st-strip{background:#4a5fb0;color:#fff;}
+  .status.over .st-strip .d{animation:none;}
+  .over-body{padding:18px 16px 6px;text-align:center;}
+  .over-icon{font-size:34px;}
+  .over-title{font-size:17px;font-weight:800;color:#384a8f;margin-top:6px;}
+  .over-info{font-size:13px;color:var(--ink2);margin-top:8px;line-height:1.6;}
+  .over-info b{font-family:var(--mono);color:var(--ink);font-weight:700;}
+  .over-count{
+    display:inline-block;margin-top:11px;background:#eef0fb;border:1px solid #4a5fb0;color:#384a8f;
+    border-radius:11px;padding:8px 16px;font-size:13px;font-weight:700;
+  }
+  .over-count b{font-family:var(--mono);font-size:16px;}
+  .rec-badge.over{background:#eef0fb;color:#384a8f;}
+  .rec.over{border-left:4px solid #4a5fb0;}
+
+  /* ── Toast ── */
+  #toast{
+    position:fixed;left:50%;bottom:calc(28px + var(--safe-b));transform:translateX(-50%) translateY(18px);
+    background:var(--ink);color:#fff;padding:11px 20px;border-radius:11px;font-size:14px;font-weight:600;
+    opacity:0;transition:all .26s;z-index:300;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.25);max-width:88%;text-align:center;
+  }
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+  #toast.success{background:var(--run);}
+  #toast.error{background:var(--stop);}
+
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+  .empty{text-align:center;padding:46px 20px;color:var(--ink3);}
+  .empty .e-ic{font-size:42px;opacity:.55;margin-bottom:10px;}
+  .empty .e-t{font-size:14px;}
+  @media (min-width:420px){.machine-grid{grid-template-columns:repeat(3,1fr);}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="mark">⚙</div>
+    <h1>プレス日報</h1>
+  </div>
+  <div class="clock" id="clock">—</div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="input"><span class="ic">📝</span>日報入力</button>
+  <button class="tab" data-tab="records"><span class="ic">📋</span>記録</button>
+  <button class="tab" data-tab="summary"><span class="ic">📊</span>日別集計</button>
+  <button class="tab" data-tab="settings"><span class="ic">⚙️</span>設定</button>
+</nav>
+
+<!-- ===== INPUT ===== -->
+<section class="page active" id="page-input">
+
+  <div class="step">
+    <div class="step-head">
+      <div class="step-num">1</div>
+      <div class="step-title">機械を選ぶ</div>
+      <div class="step-hint" id="selHint">未選択</div>
+    </div>
+    <div class="machine-grid" id="machineGrid"></div>
+  </div>
+
+  <div class="step">
+    <div class="step-head">
+      <div class="step-num">2</div>
+      <div class="step-title">バーコードを読み取る</div>
+    </div>
+    <div class="card scan-card">
+      <div class="scanned empty" id="scannedBox">バーコードを読み取ると品番が表示されます</div>
+      <button class="btn-scan" onclick="openScanner()"><span class="cam">📷</span>バーコードを読み取る</button>
+      <div class="manual">
+        <input type="text" id="manualInput" placeholder="品番を入力" autocomplete="off" inputmode="text">
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-head">
+      <div class="step-num">3</div>
+      <div class="step-title">作業の開始・終了</div>
+    </div>
+    <div id="statusPanel"></div>
+  </div>
+
+</section>
+
+<!-- ===== RECORDS ===== -->
+<section class="page" id="page-records">
+  <div class="rec-bar">
+    <select class="rec-filter" id="recFilter" onchange="renderRecords()"></select>
+    <button class="btn-out" onclick="exportCSV()">⬇ CSV</button>
+    <button class="btn-out" onclick="exportJSON()">⬇ バックアップ</button>
+  </div>
+  <div id="recordsList"></div>
+</section>
+
+<!-- ===== DAILY SUMMARY ===== -->
+<section class="page" id="page-summary">
+  <div class="day-nav">
+    <button class="day-arrow" onclick="changeSummaryDate(-1)">◀</button>
+    <div class="day-label" id="sumDateLabel" onclick="goToday()">—</div>
+    <button class="day-arrow" onclick="changeSummaryDate(1)">▶</button>
+  </div>
+  <div class="day-meta" id="sumDayMeta"></div>
+  <div id="summaryList"></div>
+</section>
+
+<!-- ===== SETTINGS ===== -->
+<section class="page" id="page-settings">
+  <div class="card set-card">
+    <h3>🏭 機械の登録</h3>
+    <div id="machineSettingsList"></div>
+    <div class="add-row">
+      <input type="text" id="newMachId" class="mi" placeholder="機番" autocomplete="off">
+      <input type="text" id="newMachName" placeholder="名称（任意）" autocomplete="off">
+      <button class="btn-add" onclick="addMachine()">追加</button>
+    </div>
+    <div class="set-note">機番は入力画面の選択ボタンに表示されます。例：P-101</div>
+  </div>
+
+  <div class="card set-card">
+    <h3>💾 データ</h3>
+    <div class="danger-row">
+      <label class="btn-out" style="cursor:pointer">
+        ⬆ バックアップ読込
+        <input type="file" id="importFile" accept="application/json,.json" style="display:none" onchange="importJSON(event)">
+      </label>
+      <button class="btn-ghost-danger" onclick="clearRecords()">記録をすべて削除</button>
+    </div>
+    <div class="set-note">
+      データはこの端末のブラウザ内に保存されます。<br>
+      別の端末へ移すときは「バックアップ」で書き出し →「バックアップ読込」で取り込めます（記録は統合されます）。
+    </div>
+  </div>
+</section>
+
+<!-- ===== SCANNER MODAL ===== -->
+<div class="scan-modal" id="scanModal">
+  <video id="scanVideo" playsinline muted></video>
+  <div class="scan-frame"><div class="box"></div><div class="laser"></div></div>
+  <div class="scan-top">
+    <div class="t">バーコード読み取り</div>
+    <button class="scan-close" onclick="closeScanner()">✕</button>
+  </div>
+  <div class="scan-status" id="scanStatus">カメラを起動中…</div>
+</div>
+
+<!-- ===== END / QTY SHEET ===== -->
+<div class="ov" id="endSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>作業を終了</h3>
+    <div class="qty-recap" id="endRecap"></div>
+    <label class="qty-label" id="endQtyLabel">最終の生産個数</label>
+    <input type="number" class="qty-input" id="endQty" inputmode="numeric" placeholder="0">
+    <input type="text" class="note-input" id="endNote" placeholder="備考（任意）" autocomplete="off">
+    <div class="sheet-actions">
+      <button class="b-cancel" onclick="closeEndSheet()">キャンセル</button>
+      <button class="b-ok" onclick="confirmEnd()">■ 終了して記録</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== STOP REASON SHEET ===== -->
+<div class="ov" id="stopSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>作業を停止</h3>
+    <p>停止の理由を選んでください。直ったら「再開」できます。</p>
+    <div class="chip-grid" id="stopChips">
+      <button class="chip" onclick="selStopChip(this)">材料切れ</button>
+      <button class="chip" onclick="selStopChip(this)">金型不具合</button>
+      <button class="chip" onclick="selStopChip(this)">設備故障</button>
+      <button class="chip" onclick="selStopChip(this)">品質不良</button>
+      <button class="chip" onclick="selStopChip(this)">段取り替え</button>
+      <button class="chip" onclick="selStopChip(this)">作業者不在</button>
+      <button class="chip" onclick="selStopChip(this)">その他</button>
+    </div>
+    <input type="text" class="note-input" id="stopDetail" placeholder="詳細メモ（任意）" autocomplete="off">
+    <div class="sheet-actions">
+      <button class="b-cancel" onclick="closeStopSheet()">キャンセル</button>
+      <button class="b-ok warn" id="stopOk" onclick="confirmStop()">⏸ 停止する</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== END-OF-DAY CARRY-OVER SHEET ===== -->
+<div class="ov" id="carrySheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>🌙 本日終了（持ち越し）</h3>
+    <p id="carryMsg"></p>
+    <div class="qty-recap" id="carryRecap"></div>
+    <label class="qty-label">本日のカウンター数（この日の生産個数）</label>
+    <input type="number" class="qty-input" id="carryQty" inputmode="numeric" placeholder="0">
+    <input type="text" class="note-input" id="carryNote" placeholder="備考（任意）" autocomplete="off">
+    <div class="carry-actions">
+      <button class="b-ok warn" onclick="submitCarry('carry')">🌙 持ち越して記録</button>
+      <button class="carry-finish" onclick="submitCarry('done')">この作業を完了にする</button>
+      <button class="carry-finish" onclick="closeCarry()">あとで入力する（閉じる）</button>
+    </div>
+  </div>
+</div>
+
+<div class="ov" id="confirmSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3 id="cfTitle">確認</h3>
+    <p id="cfMsg"></p>
+    <div class="sheet-actions">
+      <button class="b-cancel" id="cfCancel">キャンセル</button>
+      <button class="b-ok" id="cfOk">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+
+/* ===== STORE ===== */
+let store = { machines: [], records: [] };
+const KEY = 'genbaNippoData_v1';
+
+function load(){
+  try{ const s = localStorage.getItem(KEY); if(s) store = JSON.parse(s); }catch(e){}
+  if(!store.machines) store.machines = [];
+  if(!store.records) store.records = [];
+  store.records.forEach(r=>{
+    if(!Array.isArray(r.stops)) r.stops = [];
+    if(!('lastRunEnd' in r)) r.lastRunEnd = null;
+    if(!r.sessionStart) r.sessionStart = r.startTime;
+    if(!Array.isArray(r.dailyCounts)){
+      // legacy completed records: attribute the whole qty to the finish day
+      if(r.status==='done' && r.endTime && r.qty!=null){
+        r.dailyCounts = [{ date: dateKey(new Date(r.endTime)), qty: r.qty, at: r.endTime }];
+      } else {
+        r.dailyCounts = [];
+      }
+    }
+  });
+  if(!store.machines.length){
+    store.machines = [
+      {id:'P-101', name:'100tプレス'},
+      {id:'P-102', name:'200tプレス'},
+      {id:'P-103', name:'50tプレス'},
+    ];
+    save();
+  }
+}
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){} }
+
+/* ===== STATE ===== */
+let selectedMachineId = null;
+let scan = { raw:'', partNo:'', partName:'', qty:'', due:'' };
+let summaryDate = (()=>{ const d=new Date(); d.setHours(0,0,0,0); return d; })();
+const STD_START_H = 9, STD_END_H = 17, STD_MIN = (STD_END_H - STD_START_H) * 60;
+
+/* ===== UTILS ===== */
+const pad = n => String(n).padStart(2,'0');
+const WD = ['日','月','火','水','木','金','土'];
+function fmtClock(d){ return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]}) ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function fmtDate(d){ return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日(${WD[d.getDay()]})`; }
+function fmtDT(iso){ const d=new Date(iso); return `${d.getMonth()+1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function fmtT(iso){ const d=new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function durMin(a,b){ return Math.max(0, Math.round((new Date(b)-new Date(a))/60000)); }
+function durLabel(min){ const h=Math.floor(min/60), m=min%60; return h>0?`${h}時間${pad(m)}分`:`${m}分`; }
+function elapsedClock(fromIso){
+  const s = Math.max(0, Math.floor((Date.now()-new Date(fromIso))/1000));
+  return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`;
+}
+function uid(){ return 'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+let toastT;
+function toast(msg, type=''){
+  const t = $('#toast'); t.textContent = msg; t.className = type; void t.offsetWidth;
+  t.classList.add('show', ...(type?[type]:[]));
+  clearTimeout(toastT); toastT = setTimeout(()=>t.classList.remove('show'), 2400);
+}
+function machineName(id){ const m = store.machines.find(x=>x.id===id); return m? m.name : ''; }
+function runningFor(id){ return store.records.find(r=>r.machineId===id && r.status==='running'); }
+function stoppedFor(id){ return store.records.find(r=>r.machineId===id && r.status==='stopped'); }
+function overnightFor(id){ return store.records.find(r=>r.machineId===id && r.status==='overnight'); }
+function activeFor(id){ return store.records.find(r=>r.machineId===id && (r.status==='running'||r.status==='stopped'||r.status==='overnight')); }
+function openStop(r){ return r && r.stops ? r.stops.find(s=>!s.to) : null; }
+
+/* ── date / multi-day helpers ── */
+function dateKey(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function atHour(d, h){ const x=new Date(d); x.setHours(h,0,0,0); return x; }
+function endRefT(r){
+  if(r.endTime) return new Date(r.endTime).getTime();
+  if(r.lastRunEnd) return new Date(r.lastRunEnd).getTime();
+  return Date.now();
+}
+function cutoffT(r){
+  const ss = new Date(r.sessionStart||r.startTime);
+  let c = atHour(ss, STD_END_H).getTime();
+  if(ss.getTime() >= c) c = atHour(new Date(ss.getTime()+86400000), STD_END_H).getTime();
+  return c;
+}
+function recordTotalQty(r){
+  if(r.dailyCounts && r.dailyCounts.length) return r.dailyCounts.reduce((s,d)=>s+(d.qty||0),0);
+  return r.qty!=null ? r.qty : 0;
+}
+function totalStopMin(r){
+  if(!r || !r.stops) return 0;
+  const ref = endRefT(r);
+  return r.stops.reduce((sum,s)=> sum + durMin(s.from, s.to || ref), 0);
+}
+function netWorkMin(r){
+  if(!r) return 0;
+  return Math.max(0, durMin(r.startTime, endRefT(r)) - totalStopMin(r));
+}
+
+/* ===== CONFIRM ===== */
+let confirmResolver = null;
+function confirmDialog(title, msg, okLabel='OK', danger=false){
+  return new Promise(res=>{
+    confirmResolver = res;
+    $('#cfTitle').textContent = title || '確認';
+    $('#cfMsg').textContent = (msg && String(msg).trim()) ? msg : 'この操作を実行しますか？';
+    const ok = $('#cfOk'), cancel = $('#cfCancel');
+    ok.textContent = okLabel || 'OK';
+    ok.className = 'b-ok' + (danger?' danger':'');
+    ok.onclick = ()=>resolveConfirm(true);
+    cancel.onclick = ()=>resolveConfirm(false);
+    $('#confirmSheet').classList.add('active');
+  });
+}
+function resolveConfirm(v){
+  $('#confirmSheet').classList.remove('active');
+  const r = confirmResolver; confirmResolver = null;
+  if(r) r(v);
+}
+
+/* ===== TABS ===== */
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick = ()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    $('#page-'+t.dataset.tab).classList.add('active');
+    if(t.dataset.tab==='records') renderRecords();
+    if(t.dataset.tab==='summary') renderSummary();
+    if(t.dataset.tab==='settings') renderMachineSettings();
+  };
+});
+
+/* ===== MACHINE GRID ===== */
+function renderMachineGrid(){
+  const g = $('#machineGrid');
+  if(!store.machines.length){
+    g.innerHTML = '<div class="machine-empty">「設定」タブで機械を登録してください</div>';
+    return;
+  }
+  g.innerHTML = store.machines.map(m=>{
+    const run = runningFor(m.id);
+    const paused = stoppedFor(m.id);
+    const over = overnightFor(m.id);
+    const sel = m.id===selectedMachineId;
+    let tag = '';
+    if(run) tag = `<span class="m-tag"><span class="d"></span>稼働中</span>`;
+    else if(paused) tag = `<span class="m-tag pause"><span class="d"></span>停止中</span>`;
+    else if(over) tag = `<span class="m-tag over"><span class="d"></span>持ち越し</span>`;
+    return `<button class="machine-btn ${sel?'sel':''} ${run?'busy':''} ${paused?'paused':''} ${over?'over':''}" onclick="selectMachine('${esc(m.id)}')">
+      <span class="m-id">${esc(m.id)}</span>
+      <span class="m-name">${esc(m.name||'')}</span>
+      ${tag}
+    </button>`;
+  }).join('');
+}
+function selectMachine(id){
+  selectedMachineId = (selectedMachineId===id)? null : id;
+  $('#selHint').textContent = selectedMachineId ? selectedMachineId : '未選択';
+  renderMachineGrid();
+  renderStatus();
+}
+
+/* ===== SCAN DISPLAY ===== */
+function parseScan(raw){
+  raw = (raw||'').trim();
+  const out = { raw, partNo:raw, partName:'', qty:'', due:'' };
+  if(!raw) return out;
+  try{
+    const o = JSON.parse(raw);
+    if(o && typeof o==='object'){
+      out.partNo = String(o.partNo||o.part||o['品番']||raw);
+      out.partName = String(o.partName||o.name||o['部品名']||'');
+      out.qty = o.qty!=null?String(o.qty):(o.quantity!=null?String(o.quantity):(o['数量']!=null?String(o['数量']):''));
+      out.due = String(o.due||o.dueDate||o['納期']||'');
+      return out;
+    }
+  }catch(e){}
+  if(/[,\t|;]/.test(raw)){
+    const parts = raw.split(/[,\t|;]/).map(s=>s.trim()).filter(Boolean);
+    out.partNo = parts[0]||raw;
+    out.partName = parts[1]||'';
+    parts.slice(1).forEach(p=>{
+      if(/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(p)) out.due = p;
+      else if(/^\d{2,}$/.test(p) && !out.qty) out.qty = p;
+    });
+  }
+  return out;
+}
+function applyScan(raw){
+  scan = parseScan(raw);
+  $('#manualInput').value = scan.partNo;
+  renderScanned();
+  renderStatus();
+}
+function renderScanned(){
+  const box = $('#scannedBox');
+  if(!scan.partNo){
+    box.className = 'scanned empty';
+    box.textContent = 'バーコードを読み取ると品番が表示されます';
+    return;
+  }
+  box.className = 'scanned';
+  const meta = [];
+  if(scan.qty) meta.push(`<span class="sc-pill">指示数 <b>${esc(scan.qty)}</b></span>`);
+  if(scan.due) meta.push(`<span class="sc-pill">納期 <b>${esc(scan.due)}</b></span>`);
+  box.innerHTML = `
+    <div class="sc-part">${esc(scan.partNo)}</div>
+    ${scan.partName?`<div class="sc-name">${esc(scan.partName)}</div>`:''}
+    ${meta.length?`<div class="sc-meta">${meta.join('')}</div>`:''}`;
+}
+$('#manualInput').addEventListener('input', e=>{
+  const v = e.target.value;
+  scan = { raw:v, partNo:v.trim(), partName:scan.partName, qty:scan.qty, due:scan.due };
+  if(!v.trim()){ scan = {raw:'',partNo:'',partName:'',qty:'',due:''}; }
+  renderScanned(); renderStatus();
+});
+
+/* ===== STATUS PANEL ===== */
+function renderStatus(){
+  const panel = $('#statusPanel');
+  const run = selectedMachineId ? runningFor(selectedMachineId) : null;
+  const paused = selectedMachineId ? stoppedFor(selectedMachineId) : null;
+  const over = selectedMachineId ? overnightFor(selectedMachineId) : null;
+
+  if(run){
+    const stMin = totalStopMin(run);
+    const days = (run.dailyCounts||[]).length;
+    const prior = recordTotalQty(run);
+    const multi = days > 0;
+    panel.innerHTML = `
+      <div class="status running">
+        <div class="st-strip"><span class="d"></span>稼働中 — ${esc(run.machineId)}${multi?` ・ ${days+1}日目`:''}</div>
+        <div class="st-body">
+          <div class="timer" id="liveTimer">00:00:00</div>
+          <div class="timer-sub">品番 <b>${esc(run.partNo)}</b>${run.partName?' / '+esc(run.partName):''}<br>開始 <b>${fmtDT(run.startTime)}</b>${multi?` ・ 本日分 ・ 累計 <b>${prior.toLocaleString()}</b>個`:''}${stMin>0?` ・ 停止累計 <b>${durLabel(stMin)}</b>`:''}</div>
+        </div>
+        <div style="padding:0 16px 18px">
+          <div class="btn-row">
+            <button class="btn-big btn-pause" onclick="openStopSheet()"><span class="ic">⏸</span>停止</button>
+            <button class="btn-big btn-end-sm" onclick="openEndSheet()"><span class="ic">■</span>終了</button>
+          </div>
+        </div>
+      </div>`;
+    tickTimer();
+    return;
+  }
+
+  if(paused){
+    const os = openStop(paused) || {};
+    panel.innerHTML = `
+      <div class="status stopped">
+        <div class="st-strip"><span class="d"></span>停止中 — ${esc(paused.machineId)}</div>
+        <div class="st-body">
+          <div class="timer paused" id="liveTimer">00:00:00</div>
+          <div class="stop-reason-tag">⏸ ${esc(os.reason||'停止')}${os.detail?'：'+esc(os.detail):''}</div>
+          <div class="timer-sub">品番 <b>${esc(paused.partNo)}</b>${paused.partName?' / '+esc(paused.partName):''}<br>開始 <b>${fmtT(paused.startTime)}</b> ・ 停止 <b>${os.from?fmtT(os.from):'-'}</b></div>
+        </div>
+        <div style="padding:0 16px 18px">
+          <div class="btn-row">
+            <button class="btn-big btn-resume" onclick="resumeJob()"><span class="ic">▶</span>再開</button>
+            <button class="btn-big btn-end-sm" onclick="openEndSheet()"><span class="ic">■</span>終了</button>
+          </div>
+        </div>
+      </div>`;
+    tickTimer();
+    return;
+  }
+
+  if(over){
+    const prior = recordTotalQty(over);
+    const dc = (over.dailyCounts||[]);
+    const last = dc[dc.length-1];
+    if(over.pendingCount){
+      panel.innerHTML = `
+        <div class="status over">
+          <div class="st-strip"><span class="d"></span>本日終了（持ち越し） — ${esc(over.machineId)}</div>
+          <div class="over-body">
+            <div class="over-icon">🌙</div>
+            <div class="over-title" style="color:var(--pause-d)">本日のカウンター数が未入力</div>
+            <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>17:00で本日終了になりました。本日の生産個数を入力してください。</div>
+          </div>
+          <div style="padding:14px 16px 18px">
+            <button class="btn-big btn-pause" onclick="openCarryById('${over.id}')"><span class="ic">✏️</span>本日の個数を入力</button>
+          </div>
+        </div>`;
+      return;
+    }
+    panel.innerHTML = `
+      <div class="status over">
+        <div class="st-strip"><span class="d"></span>本日終了（持ち越し） — ${esc(over.machineId)}</div>
+        <div class="over-body">
+          <div class="over-icon">🌙</div>
+          <div class="over-title">翌営業日 9:00 に自動再開</div>
+          <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>${dc.length}日目まで完了 ・ 累計 <b>${prior.toLocaleString()}</b> 個</div>
+          ${last?`<div class="over-count">本日(${esc((last.date||'').replace(/-/g,'/'))}) <b>${(last.qty||0).toLocaleString()}</b> 個</div>`:''}
+        </div>
+        <div style="padding:14px 16px 18px">
+          <div class="btn-row">
+            <button class="btn-big btn-resume" onclick="manualResume()"><span class="ic">▶</span>今すぐ再開</button>
+            <button class="btn-big btn-end-sm" onclick="openEndSheet()"><span class="ic">■</span>完了</button>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  const ready = selectedMachineId && scan.partNo;
+  let msg;
+  if(!selectedMachineId) msg = '<span class="em">🏭</span>機械を選んでください';
+  else if(!scan.partNo)  msg = '<span class="em">📷</span>バーコードを読み取ってください';
+  else msg = `<span class="em">✅</span>${esc(selectedMachineId)} / ${esc(scan.partNo)} 開始できます`;
+
+  panel.innerHTML = `
+    <div class="status idle">
+      <div class="st-strip">待機中</div>
+      <div class="st-body">
+        <div class="idle-msg">${msg}</div>
+        <button class="btn-big btn-start" id="startBtn" ${ready?'':'disabled'} onclick="startJob()"><span class="ic">▶</span>開始</button>
+        ${!ready?'<div class="lock-hint">機械の選択とバーコード読み取りで開始できます</div>':''}
+      </div>
+    </div>`;
+}
+
+function manualResume(){
+  const r = selectedMachineId ? overnightFor(selectedMachineId) : null;
+  if(!r) return;
+  r.status = 'running';
+  r.sessionStart = new Date().toISOString();
+  r.lastRunEnd = null;
+  r.pendingCount = false;
+  delete r.overnightDate;
+  save();
+  toast('作業を再開しました','success');
+  renderMachineGrid();
+  renderStatus();
+}
+
+/* live timer (running → today's session, stopped → current stop) */
+let timerInt = null;
+function timerFrom(){
+  const r = selectedMachineId ? activeFor(selectedMachineId) : null;
+  if(!r) return null;
+  if(r.status==='stopped'){ const os = openStop(r); return os ? os.from : r.sessionStart; }
+  if(r.status==='running'){ return r.sessionStart || r.startTime; }
+  return null;
+}
+function tickTimer(){
+  const from = timerFrom();
+  const el = $('#liveTimer');
+  if(!from || !el){ if(timerInt){clearInterval(timerInt);timerInt=null;} return; }
+  el.textContent = elapsedClock(from);
+  if(!timerInt){
+    timerInt = setInterval(()=>{
+      const f = timerFrom();
+      const e = $('#liveTimer');
+      if(f && e){ e.textContent = elapsedClock(f); }
+      else { clearInterval(timerInt); timerInt=null; }
+    },1000);
+  }
+}
+
+/* ===== START / END ===== */
+function startJob(){
+  if(!selectedMachineId){ toast('機械を選んでください','error'); return; }
+  if(!scan.partNo){ toast('バーコードを読み取ってください','error'); return; }
+  if(activeFor(selectedMachineId)){ toast('この機械は作業中です','error'); return; }
+  store.records.push({
+    id: uid(),
+    machineId: selectedMachineId,
+    partNo: scan.partNo,
+    partName: scan.partName||'',
+    rawScan: scan.raw||scan.partNo,
+    indicatedQty: scan.qty||'',
+    due: scan.due||'',
+    startTime: new Date().toISOString(),
+    sessionStart: new Date().toISOString(),
+    endTime: null,
+    lastRunEnd: null,
+    qty: null,
+    stops: [],
+    dailyCounts: [],
+    note: '',
+    status: 'running'
+  });
+  save();
+  toast('作業を開始しました','success');
+  renderMachineGrid();
+  renderStatus();
+}
+
+/* ===== STOP / RESUME ===== */
+function selStopChip(el){
+  document.querySelectorAll('#stopChips .chip').forEach(c=>c.classList.remove('sel'));
+  el.classList.add('sel');
+}
+function openStopSheet(){
+  const run = selectedMachineId ? runningFor(selectedMachineId) : null;
+  if(!run) return;
+  document.querySelectorAll('#stopChips .chip').forEach(c=>c.classList.remove('sel'));
+  $('#stopDetail').value = '';
+  $('#stopSheet').classList.add('active');
+}
+function closeStopSheet(){ $('#stopSheet').classList.remove('active'); }
+function confirmStop(){
+  const run = selectedMachineId ? runningFor(selectedMachineId) : null;
+  if(!run){ closeStopSheet(); return; }
+  const chip = document.querySelector('#stopChips .chip.sel');
+  if(!chip){ toast('停止の理由を選んでください','error'); return; }
+  run.stops.push({ reason: chip.textContent, detail: $('#stopDetail').value.trim(), from: new Date().toISOString(), to: null });
+  run.status = 'stopped';
+  save();
+  closeStopSheet();
+  toast('作業を停止しました');
+  renderMachineGrid();
+  renderStatus();
+}
+function resumeJob(){
+  const r = selectedMachineId ? stoppedFor(selectedMachineId) : null;
+  if(!r) return;
+  const os = openStop(r);
+  if(os) os.to = new Date().toISOString();
+  r.status = 'running';
+  save();
+  toast('作業を再開しました','success');
+  renderMachineGrid();
+  renderStatus();
+}
+
+/* ===== DAY BOUNDARIES (17:00 auto end-of-day / 9:00 auto resume) ===== */
+function processDayBoundaries(){
+  const now = Date.now();
+  let changed = false;
+  // (1) Past 17:00 → running/stopped jobs become overnight (await today's count)
+  store.records.forEach(r=>{
+    if(r.status==='running' || r.status==='stopped'){
+      const cut = cutoffT(r);
+      if(now >= cut){
+        const os = openStop(r);
+        if(os) os.to = new Date(cut).toISOString();
+        r.lastRunEnd = new Date(cut).toISOString();
+        r.overnightDate = dateKey(new Date(r.sessionStart||r.startTime));
+        r.status = 'overnight';
+        r.pendingCount = true;
+        changed = true;
+      }
+    }
+  });
+  // (2) New day past 9:00 → overnight jobs (count already entered) auto-resume
+  store.records.forEach(r=>{
+    if(r.status==='overnight' && !r.pendingCount){
+      const todayKey = dateKey(new Date());
+      const nine = atHour(new Date(), STD_START_H).getTime();
+      if(r.overnightDate && todayKey > r.overnightDate && now >= nine){
+        r.status = 'running';
+        r.sessionStart = atHour(new Date(), STD_START_H).toISOString();
+        r.lastRunEnd = null;
+        delete r.overnightDate;
+        changed = true;
+      }
+    }
+  });
+  if(changed) save();
+  return changed;
+}
+function pendingCarryRecords(){ return store.records.filter(r=>r.status==='overnight' && r.pendingCount); }
+
+let carryRecordId = null;
+function openCarrySheet(r){
+  carryRecordId = r.id;
+  const dlabel = r.overnightDate ? r.overnightDate.replace(/-/g,'/') : '';
+  $('#carryMsg').textContent = `17:00を過ぎたため ${r.machineId} は本日終了になりました。本日のカウンター数（この日の生産個数）を入力してください。`;
+  const prior = (r.dailyCounts||[]).reduce((s,d)=>s+(d.qty||0),0);
+  $('#carryRecap').innerHTML =
+    `機械 <b>${esc(r.machineId)}</b> ／ 品番 <b>${esc(r.partNo)}</b><br>対象日 <b>${esc(dlabel)}</b>`+
+    (prior>0?`<br>前日までの累計 <b>${prior.toLocaleString()}</b> 個`:'');
+  $('#carryQty').value = '';
+  $('#carryNote').value = '';
+  $('#carrySheet').classList.add('active');
+  setTimeout(()=>{ const el=$('#carryQty'); if(el) el.focus(); }, 250);
+}
+function maybeShowCarry(){
+  const pend = pendingCarryRecords();
+  if(pend.length){ openCarrySheet(pend[0]); return true; }
+  return false;
+}
+function notifyPendingCarry(){
+  const pend = pendingCarryRecords();
+  if(!pend.length) return;
+  const names = pend.map(r=>r.machineId).join('・');
+  toast(`${names} が本日終了です。機械を選んで本日の個数を入力してください`, 'success');
+}
+function openCarryById(id){
+  const r = store.records.find(x=>x.id===id);
+  if(r) openCarrySheet(r);
+}
+function closeCarry(){
+  // hide without recording; the count stays pending and can be entered later from the machine panel
+  $('#carrySheet').classList.remove('active');
+  carryRecordId = null;
+  renderStatus();
+}
+function submitCarry(action){
+  const r = store.records.find(x=>x.id===carryRecordId);
+  if(!r){ $('#carrySheet').classList.remove('active'); return; }
+  const qv = $('#carryQty').value;
+  if(qv==='' || isNaN(parseInt(qv))){ toast('本日の個数を入力してください','error'); return; }
+  r.dailyCounts = r.dailyCounts || [];
+  r.dailyCounts.push({
+    date: r.overnightDate || dateKey(new Date(r.lastRunEnd||Date.now())),
+    qty: parseInt(qv),
+    at: new Date().toISOString(),
+    note: $('#carryNote').value.trim()
+  });
+  r.pendingCount = false;
+  if(action==='done'){
+    r.endTime = r.lastRunEnd || new Date().toISOString();
+    r.qty = recordTotalQty(r);
+    r.status = 'done';
+    r.lastRunEnd = null;
+    delete r.overnightDate;
+  }
+  save();
+  $('#carrySheet').classList.remove('active');
+  carryRecordId = null;
+  toast(action==='done' ? '作業を完了しました' : '本日分を記録しました（翌営業日9時に自動再開）', 'success');
+  processDayBoundaries();
+  refreshActiveViews();
+  notifyPendingCarry();
+}
+function refreshActiveViews(){
+  renderMachineGrid();
+  renderStatus();
+  if($('#page-summary').classList.contains('active')) renderSummary();
+  if($('#page-records').classList.contains('active')) renderRecords();
+}
+// periodic + on-demand boundary check (non-blocking: just notify, never auto-popup)
+function tickBoundaries(){
+  const changed = processDayBoundaries();
+  if(changed){ refreshActiveViews(); notifyPendingCarry(); }
+}
+
+function openEndSheet(){
+  const r = selectedMachineId ? activeFor(selectedMachineId) : null;
+  if(!r) return;
+  const stMin = totalStopMin(r);
+  const prior = (r.dailyCounts||[]).reduce((s,d)=>s+(d.qty||0),0);
+  const multi = (r.dailyCounts||[]).length > 0;
+  $('#endQtyLabel').textContent = multi ? '本日の生産個数（カウンター数）' : '最終の生産個数';
+  $('#endRecap').innerHTML =
+    `機械 <b>${esc(r.machineId)}</b> ／ 品番 <b>${esc(r.partNo)}</b><br>`+
+    `開始 <b>${fmtDT(r.startTime)}</b>`+
+    (multi ? `<br>前日までの累計 <b>${prior.toLocaleString()}</b> 個` : ` ・ 経過 <b>${durLabel(durMin(r.startTime, Date.now()))}</b>`)+
+    (stMin>0?`<br>停止 <b>${durLabel(stMin)}</b>`:'');
+  $('#endQty').value = multi ? '' : (r.indicatedQty || '');
+  $('#endNote').value = '';
+  $('#endSheet').classList.add('active');
+  setTimeout(()=>$('#endQty').focus(), 250);
+}
+function closeEndSheet(){ $('#endSheet').classList.remove('active'); }
+function confirmEnd(){
+  const r = selectedMachineId ? activeFor(selectedMachineId) : null;
+  if(!r) { closeEndSheet(); return; }
+  const qv = $('#endQty').value;
+  if(qv==='' || isNaN(parseInt(qv))){ toast('生産個数を入力してください','error'); return; }
+  const nowIso = new Date().toISOString();
+  const os = openStop(r);
+  if(os) os.to = nowIso;            // close a still-open stop at end time
+  // record today's count as a daily entry, then total them
+  r.dailyCounts = r.dailyCounts || [];
+  r.dailyCounts.push({ date: dateKey(new Date()), qty: parseInt(qv), at: nowIso, note:'' });
+  r.endTime = nowIso;
+  r.lastRunEnd = null;
+  r.qty = recordTotalQty(r);
+  r.note = $('#endNote').value.trim();
+  r.status = 'done';
+  delete r.overnightDate; r.pendingCount = false;
+  save();
+  closeEndSheet();
+  toast('日報を記録しました','success');
+  scan = {raw:'',partNo:'',partName:'',qty:'',due:''};
+  $('#manualInput').value = '';
+  renderScanned();
+  renderMachineGrid();
+  renderStatus();
+}
+
+/* ===== SCANNER ===== */
+let scanStream=null, scanning=false, rafId=null, zxingReader=null;
+
+function loadZxing(){
+  return new Promise((res,rej)=>{
+    if(window.ZXing) return res();
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js';
+    s.onload = res; s.onerror = ()=>rej(new Error('zxing'));
+    document.head.appendChild(s);
+  });
+}
+async function openScanner(){
+  $('#scanModal').classList.add('active');
+  $('#scanStatus').textContent = 'カメラを起動中…';
+  scanning = true;
+  const video = $('#scanVideo');
+
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    $('#scanStatus').textContent = 'この端末ではカメラを使えません。手入力をご利用ください。';
+    return;
+  }
+
+  if('BarcodeDetector' in window){
+    try{
+      scanStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'} }, audio:false });
+    }catch(e){
+      $('#scanStatus').textContent = camErr(e); return;
+    }
+    video.srcObject = scanStream;
+    try{ await video.play(); }catch(e){}
+    let fmts = ['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','data_matrix','upc_a','upc_e','pdf417','aztec'];
+    try{ const sup = await BarcodeDetector.getSupportedFormats(); fmts = fmts.filter(f=>sup.includes(f)); }catch(e){}
+    const det = new BarcodeDetector({ formats: fmts.length?fmts:undefined });
+    $('#scanStatus').textContent = '枠内にバーコードをかざしてください';
+    detectLoop(det, video);
+  } else {
+    $('#scanStatus').textContent = '読み取り機能を準備中…';
+    try{ await loadZxing(); }catch(e){
+      $('#scanStatus').textContent = '読み取り機能を読み込めませんでした（通信環境をご確認ください）。手入力をご利用ください。';
+      return;
+    }
+    try{
+      zxingReader = new ZXing.BrowserMultiFormatReader();
+      let devId = null;
+      try{
+        const devs = await zxingReader.listVideoInputDevices();
+        const back = devs.find(d=>/back|rear|environment|背面|外側/i.test(d.label));
+        devId = back ? back.deviceId : (devs.length?devs[devs.length-1].deviceId:null);
+      }catch(e){}
+      $('#scanStatus').textContent = '枠内にバーコードをかざしてください';
+      zxingReader.decodeFromVideoDevice(devId, video, (result)=>{
+        if(result && scanning) onDetected(result.getText());
+      });
+    }catch(e){
+      $('#scanStatus').textContent = camErr(e);
+    }
+  }
+}
+function camErr(e){
+  if(e && (e.name==='NotAllowedError'||e.name==='SecurityError'))
+    return 'カメラの使用が許可されていません。手入力をご利用ください。';
+  if(e && e.name==='NotFoundError') return 'カメラが見つかりません。手入力をご利用ください。';
+  return 'カメラを起動できませんでした。手入力をご利用ください。';
+}
+async function detectLoop(det, video){
+  if(!scanning) return;
+  try{
+    if(video.readyState>=2){
+      const codes = await det.detect(video);
+      if(codes && codes.length){ onDetected(codes[0].rawValue); return; }
+    }
+  }catch(e){}
+  rafId = requestAnimationFrame(()=>detectLoop(det, video));
+}
+function onDetected(text){
+  if(!scanning) return;
+  scanning = false;
+  if(navigator.vibrate) navigator.vibrate(60);
+  applyScan(text);
+  closeScanner();
+  toast('読み取りました','success');
+}
+function closeScanner(){
+  scanning = false;
+  if(rafId){ cancelAnimationFrame(rafId); rafId=null; }
+  if(zxingReader){ try{ zxingReader.reset(); }catch(e){} zxingReader=null; }
+  if(scanStream){ scanStream.getTracks().forEach(t=>t.stop()); scanStream=null; }
+  $('#scanVideo').srcObject = null;
+  $('#scanModal').classList.remove('active');
+}
+
+/* ===== RECORDS ===== */
+function renderRecords(){
+  const filterSel = $('#recFilter');
+  const cur = filterSel.value || 'all';
+  filterSel.innerHTML = '<option value="all">すべての機械</option>' +
+    store.machines.map(m=>`<option value="${esc(m.id)}">${esc(m.id)}</option>`).join('');
+  filterSel.value = [...filterSel.options].some(o=>o.value===cur) ? cur : 'all';
+  const filter = filterSel.value;
+
+  const list = $('#recordsList');
+  let recs = store.records.slice();
+  if(filter!=='all') recs = recs.filter(r=>r.machineId===filter);
+
+  if(!recs.length){
+    list.innerHTML = '<div class="empty"><div class="e-ic">📋</div><div class="e-t">まだ記録がありません</div></div>';
+    return;
+  }
+
+  // group by machine, in machine-list order
+  const order = store.machines.map(m=>m.id);
+  const groups = {};
+  recs.forEach(r=>{ (groups[r.machineId] = groups[r.machineId]||[]).push(r); });
+  const ids = Object.keys(groups).sort((a,b)=>{
+    const ia=order.indexOf(a), ib=order.indexOf(b);
+    return (ia<0?999:ia)-(ib<0?999:ib);
+  });
+
+  list.innerHTML = ids.map(id=>{
+    const items = groups[id].sort((a,b)=> new Date(b.startTime)-new Date(a.startTime));
+    return `
+    <div class="mgroup">
+      <div class="mgroup-head">
+        <span class="gid">${esc(id)}</span>
+        <span class="gname">${esc(machineName(id))}</span>
+        <span class="gcount">${items.length}件</span>
+      </div>
+      ${items.map(recCard).join('')}
+    </div>`;
+  }).join('');
+}
+function recCard(r){
+  const running = r.status==='running';
+  const paused = r.status==='stopped';
+  const over = r.status==='overnight';
+  const active = running || paused || over;
+  const dur = durMin(r.startTime, endRefT(r));
+  const stMin = totalStopMin(r);
+  const stops = (r.stops||[]);
+  const dc = (r.dailyCounts||[]);
+  const total = recordTotalQty(r);
+  const badge = running ? ['run','稼働中'] : paused ? ['paused','停止中'] : over ? ['over','持ち越し'] : ['done','完了'];
+  const showQty = (r.status==='done') || dc.length>0;   // show total once any day recorded
+
+  const stopsHtml = stops.length ? `
+    <div class="rec-stops">
+      <div class="sh-head">停止 ${stops.length}回 / 合計 ${durLabel(stMin)}</div>
+      ${stops.map(s=>{
+        const open = !s.to;
+        const d = durMin(s.from, s.to || endRefT(r));
+        return `<div class="rec-stop-line"><span class="r">${esc(s.reason||'停止')}</span>${s.detail?'<span>'+esc(s.detail)+'</span>':''}<span class="t">${fmtT(s.from)}〜${open?'(継続中)':fmtT(s.to)} ${durLabel(d)}</span></div>`;
+      }).join('')}
+    </div>` : '';
+
+  const dailyHtml = dc.length>1 || (dc.length>=1 && over) ? `
+    <div class="rec-stops">
+      <div class="sh-head">日別の生産個数（${dc.length}日）</div>
+      ${dc.map(d=>`<div class="rec-stop-line"><span class="r" style="color:#384a8f">${esc((d.date||'').replace(/-/g,'/'))}</span>${d.note?'<span>'+esc(d.note)+'</span>':''}<span class="t" style="color:var(--orange-d)">${(d.qty||0).toLocaleString()}個</span></div>`).join('')}
+    </div>` : '';
+
+  return `
+  <div class="rec ${running?'run':''} ${paused?'paused':''} ${over?'over':''}">
+    <div class="rec-top">
+      <div>
+        <div class="rec-part">${esc(r.partNo)}</div>
+        ${r.partName?`<div class="rec-pname">${esc(r.partName)}</div>`:''}
+      </div>
+      <span class="rec-badge ${badge[0]}">${badge[1]}</span>
+    </div>
+    <div class="rec-grid">
+      <div class="rec-cell"><div class="lab">開始</div><div class="val">${fmtDT(r.startTime)}</div></div>
+      <div class="rec-cell"><div class="lab">終了</div><div class="val">${r.status==='done'?fmtDT(r.endTime):'—'}</div></div>
+      <div class="rec-cell"><div class="lab">${r.status==='done'?'実働日数':'経過'}</div><div class="val">${r.status==='done'? (dc.length+'日') : durLabel(dur)+'〜'}</div></div>
+      <div class="rec-cell"><div class="lab">${dc.length>1?'合計個数':'個数'}</div><div class="val qty">${showQty?total.toLocaleString():'—'}</div></div>
+      ${stMin>0?`<div class="rec-cell"><div class="lab">停止合計</div><div class="val stopval">${durLabel(stMin)}</div></div>
+      <div class="rec-cell"><div class="lab">正味稼働</div><div class="val">${durLabel(netWorkMin(r))}${active?'〜':''}</div></div>`:''}
+    </div>
+    ${dailyHtml}
+    ${stopsHtml}
+    ${r.note?`<div class="rec-note">📝 ${esc(r.note)}</div>`:''}
+    ${active?'':`<button class="rec-del" onclick="deleteRecord('${r.id}')">記録を削除</button>`}
+  </div>`;
+}
+async function deleteRecord(id){
+  const ok = await confirmDialog('記録の削除','この日報記録を削除します。よろしいですか？','削除する',true);
+  if(!ok) return;
+  store.records = store.records.filter(r=>r.id!==id);
+  save(); renderRecords(); toast('削除しました');
+}
+
+/* ===== DAILY SUMMARY ===== */
+function changeSummaryDate(delta){
+  summaryDate.setDate(summaryDate.getDate()+delta);
+  renderSummary();
+}
+function goToday(){
+  const d=new Date(); d.setHours(0,0,0,0); summaryDate=d;
+  renderSummary();
+}
+function clipMin(s,e,ws,we){ const a=Math.max(s,ws), b=Math.min(e,we); return Math.max(0,(b-a)/60000); }
+
+// Compute one machine's stats for the given calendar day, against the 9:00–17:00 standard window.
+function summaryFor(machineId, dayDate){
+  const ws = new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT = ws.getTime();
+  const weFull = new Date(dayDate); weFull.setHours(STD_END_H,0,0,0); const weFullT = weFull.getTime();
+  const now = Date.now();
+  const weEff = Math.min(weFullT, now);           // count only elapsed standard-time
+  const elapsedMin = Math.max(0, (weEff - wsT)/60000);
+
+  const dayS = new Date(dayDate); dayS.setHours(0,0,0,0);
+  const dayE = new Date(dayDate); dayE.setHours(23,59,59,999);
+
+  let runMin = 0, loggedStopMin = 0, qty = 0, finishedCount = 0;
+  const reasons = {};
+  const dayKey = dateKey(new Date(dayDate));
+
+  store.records.forEach(r=>{
+    if(r.machineId !== machineId) return;
+    const startT = new Date(r.startTime).getTime();
+    const endT = endRefT(r);   // endTime, else last force-stop, else now
+
+    // time inside the measured window [wsT, weEff]
+    if(elapsedMin > 0 && startT < weEff && endT > wsT){
+      const span = clipMin(startT, endT, wsT, weEff);
+      let st = 0;
+      (r.stops||[]).forEach(s=>{
+        const sf = new Date(s.from).getTime();
+        const stt = s.to ? new Date(s.to).getTime() : endT;
+        const m = clipMin(sf, stt, wsT, weEff);
+        if(m > 0){ st += m; reasons[s.reason] = (reasons[s.reason]||0) + m; }
+      });
+      loggedStopMin += st;
+      runMin += Math.max(0, span - st);
+    }
+
+    // pieces: attribute each day's entered count to that day
+    (r.dailyCounts||[]).forEach(d=>{
+      if(d.date === dayKey){ qty += (d.qty||0); finishedCount++; }
+    });
+  });
+
+  runMin = Math.round(runMin);
+  const elapsed = Math.round(elapsedMin);
+  const notRun = Math.max(0, elapsed - runMin);          // 止まっている（停止＋空き）
+  const remain = Math.max(0, STD_MIN - elapsed);          // まだ来ていない時間（当日進行中）
+  const rate = elapsed > 0 ? Math.round(runMin/elapsed*100) : null;
+  return { runMin, notRun, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, qty, finishedCount, rate, reasons };
+}
+
+function renderSummary(){
+  const d = summaryDate;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const isToday = d.getTime() === today.getTime();
+  $('#sumDateLabel').textContent = fmtDate(d) + (isToday ? '（今日）' : '');
+
+  // day totals
+  let totalQty = 0, totalRun = 0, totalElapsed = 0;
+  store.machines.forEach(m=>{
+    const s = summaryFor(m.id, d);
+    totalQty += s.qty; totalRun += s.runMin; totalElapsed += s.elapsed;
+  });
+  const avgRate = totalElapsed > 0 ? Math.round(totalRun/totalElapsed*100) : null;
+  $('#sumDayMeta').innerHTML = `
+    <div class="dm"><div class="lab">合計生産個数</div><div class="val">${totalQty.toLocaleString()}<small> 個</small></div></div>
+    <div class="dm"><div class="lab">平均稼働率（9〜17時）</div><div class="val">${avgRate==null?'—':avgRate+'<small> %</small>'}</div></div>`;
+
+  const list = $('#summaryList');
+  if(!store.machines.length){
+    list.innerHTML = '<div class="empty"><div class="e-ic">🏭</div><div class="e-t">「設定」タブで機械を登録してください</div></div>';
+    return;
+  }
+
+  list.innerHTML = store.machines.map(m=>{
+    const s = summaryFor(m.id, d);
+    const runPct  = STD_MIN ? (s.runMin/STD_MIN*100) : 0;
+    const stopPct = STD_MIN ? (s.notRun/STD_MIN*100) : 0;
+    const remPct  = STD_MIN ? (s.remain/STD_MIN*100) : 0;
+    const rateCls = s.rate==null ? 'none' : (s.rate>=60 ? '' : 'low');
+    const reasonKeys = Object.keys(s.reasons);
+    const reasonsHtml = reasonKeys.length ? `
+      <div class="sum-reasons"><span class="rh">記録された停止</span>${
+        reasonKeys.map(k=>`<span class="rr">${esc(k)} ${durLabel(Math.round(s.reasons[k]))}</span>`).join('')
+      }</div>` : '';
+    return `
+    <div class="sum-card">
+      <div class="sum-head">
+        <span class="sid">${esc(m.id)}</span>
+        <span class="sname">${esc(m.name||'')}</span>
+        <span class="srate ${rateCls}">稼働率 ${s.rate==null?'—':s.rate+'%'}</span>
+      </div>
+      <div class="sum-bar">
+        ${runPct>0?`<div class="seg run" style="width:${runPct}%"></div>`:''}
+        ${stopPct>0?`<div class="seg stop" style="width:${stopPct}%"></div>`:''}
+        ${remPct>0?`<div class="seg remain" style="width:${remPct}%"></div>`:''}
+      </div>
+      <div class="sum-scale"><span>9:00</span><span>13:00</span><span>17:00</span></div>
+      <div class="sum-stats">
+        <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
+        <div class="ss"><div class="lab"><span class="dot stop"></span>止まっている</div><div class="val stop">${durLabel(s.notRun)}</div></div>
+        <div class="ss"><div class="lab">生産個数</div><div class="val qty">${s.qty.toLocaleString()}個</div></div>
+      </div>
+      ${reasonsHtml}
+      <div class="sum-jobs">記録 ${s.finishedCount}件${s.remain>0 && s.elapsed>0?' ・ 残り定時 '+durLabel(s.remain):''}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ===== EXPORT / IMPORT ===== */
+function exportCSV(){
+  if(!store.records.length){ toast('記録がありません','error'); return; }
+  const head = ['機番','機械名','品番','部品名','バーコード内容','指示数','納期','開始日時','終了日時','実働日数','所要(分)','停止回数','停止合計(分)','正味稼働(分)','合計個数','日別個数','状態','停止理由','備考'];
+  const stLabel = s => s==='running'?'稼働中':s==='stopped'?'停止中':s==='overnight'?'持ち越し':'完了';
+  const rows = store.records.slice().sort((a,b)=> new Date(a.startTime)-new Date(b.startTime)).map(r=>{
+    const dur = r.endTime ? durMin(r.startTime,r.endTime) : '';
+    const stops = r.stops||[];
+    const stMin = totalStopMin(r);
+    const reasons = stops.map(s=>s.reason + (s.detail?'('+s.detail+')':'')).join(' / ');
+    const net = r.endTime ? netWorkMin(r) : '';
+    const dc = r.dailyCounts||[];
+    const daily = dc.map(d=>`${(d.date||'').replace(/-/g,'/')}:${d.qty||0}`).join(' / ');
+    const total = recordTotalQty(r);
+    return [
+      r.machineId, machineName(r.machineId), r.partNo, r.partName||'', r.rawScan||'',
+      r.indicatedQty||'', r.due||'',
+      r.startTime?fmtFull(r.startTime):'', r.endTime?fmtFull(r.endTime):'',
+      dc.length||'', dur, stops.length, (stops.length?stMin:''), net,
+      (dc.length||r.status==='done')?total:'', daily, stLabel(r.status), reasons, r.note||''
+    ].map(csvCell).join(',');
+  });
+  const csv = '\uFEFF' + head.map(csvCell).join(',') + '\r\n' + rows.join('\r\n');
+  downloadBlob(csv, `日報_${stamp()}.csv`, 'text/csv;charset=utf-8');
+  toast('CSVを書き出しました','success');
+}
+function csvCell(v){ v = String(v==null?'':v); return /[",\r\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
+function fmtFull(iso){ const d=new Date(iso); return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function stamp(){ const d=new Date(); return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; }
+
+function exportJSON(){
+  const data = JSON.stringify({ exportedAt:new Date().toISOString(), app:'genba-nippo', version:1, data:store }, null, 2);
+  downloadBlob(data, `日報バックアップ_${stamp()}.json`, 'application/json');
+  toast('バックアップを書き出しました','success');
+}
+function downloadBlob(content, filename, type){
+  const blob = new Blob([content], {type});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 500);
+}
+function importJSON(e){
+  const file = e.target.files[0]; e.target.value='';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = async ()=>{
+    let parsed;
+    try{ parsed = JSON.parse(reader.result); }catch(err){ toast('ファイルを読み込めません','error'); return; }
+    const inc = parsed.data || parsed;
+    if(!inc || !Array.isArray(inc.records)){ toast('対応していない形式です','error'); return; }
+    const ok = await confirmDialog('バックアップ読込',`機械 ${(inc.machines||[]).length}件・記録 ${inc.records.length}件 を取り込みます。既存データと統合します。`,'取り込む');
+    if(!ok) return;
+    // merge machines by id
+    (inc.machines||[]).forEach(m=>{ if(!store.machines.some(x=>x.id===m.id)) store.machines.push(m); });
+    // merge records by id
+    const ids = new Set(store.records.map(r=>r.id));
+    let added=0;
+    inc.records.forEach(r=>{ if(r.id && !ids.has(r.id)){ if(!Array.isArray(r.stops)) r.stops=[]; if(!Array.isArray(r.dailyCounts)) r.dailyCounts=[]; if(!('lastRunEnd' in r)) r.lastRunEnd=null; if(!r.sessionStart) r.sessionStart=r.startTime; store.records.push(r); ids.add(r.id); added++; } });
+    save();
+    renderMachineGrid(); renderMachineSettings(); renderRecords();
+    toast(`${added}件の記録を取り込みました`,'success');
+  };
+  reader.readAsText(file);
+}
+
+/* ===== SETTINGS ===== */
+function renderMachineSettings(){
+  const el = $('#machineSettingsList');
+  if(!store.machines.length){
+    el.innerHTML = '<div class="set-note">機械が未登録です。下から追加してください。</div>';
+    return;
+  }
+  el.innerHTML = store.machines.map(m=>`
+    <div class="mset">
+      <span class="mi-id">${esc(m.id)}</span>
+      <span class="mi-name">${esc(m.name||'')}</span>
+      <button class="x" onclick="deleteMachine('${esc(m.id)}')">✕</button>
+    </div>`).join('');
+}
+function addMachine(){
+  const id = $('#newMachId').value.trim();
+  const name = $('#newMachName').value.trim();
+  if(!id){ toast('機番を入力してください','error'); return; }
+  if(store.machines.some(m=>m.id===id)){ toast('同じ機番が登録済みです','error'); return; }
+  store.machines.push({id, name});
+  save();
+  $('#newMachId').value=''; $('#newMachName').value='';
+  renderMachineSettings(); renderMachineGrid();
+  toast('機械を追加しました','success');
+}
+async function deleteMachine(id){
+  if(activeFor(id)){ toast('作業中の機械は削除できません','error'); return; }
+  const ok = await confirmDialog('機械の削除',`${id} を一覧から削除します。記録は残ります。`,'削除する',true);
+  if(!ok) return;
+  store.machines = store.machines.filter(m=>m.id!==id);
+  if(selectedMachineId===id) selectedMachineId=null;
+  save(); renderMachineSettings(); renderMachineGrid(); renderStatus();
+  toast('削除しました');
+}
+async function clearRecords(){
+  if(!store.records.length){ toast('記録がありません'); return; }
+  const ok = await confirmDialog('記録の全削除',`記録 ${store.records.length}件 をすべて削除します。この操作は元に戻せません。`,'すべて削除',true);
+  if(!ok) return;
+  store.records = [];
+  save(); renderRecords(); renderMachineGrid(); renderStatus();
+  toast('記録を削除しました');
+}
+
+/* ===== CLOCK ===== */
+function clockTick(){ $('#clock').textContent = fmtClock(new Date()); }
+
+/* ===== UNIVERSAL MODAL DISMISS (tap background / Esc) ===== */
+function closeAnyOverlay(ov){
+  if(!ov) return;
+  if(ov.id === 'confirmSheet'){ resolveConfirm(false); return; }
+  if(ov.id === 'endSheet'){ closeEndSheet(); return; }
+  if(ov.id === 'stopSheet'){ closeStopSheet(); return; }
+  if(ov.id === 'carrySheet'){ closeCarry(); return; }
+  ov.classList.remove('active');
+}
+function setupOverlayDismiss(){
+  document.querySelectorAll('.ov').forEach(ov=>{
+    ov.addEventListener('click', e=>{ if(e.target === ov) closeAnyOverlay(ov); });
+  });
+  // camera modal: tapping its dark edges does nothing destructive; leave its ✕ button
+  document.addEventListener('keydown', e=>{
+    if(e.key !== 'Escape') return;
+    const open = document.querySelector('.ov.active');
+    if(open){ closeAnyOverlay(open); return; }
+    if($('#scanModal').classList.contains('active')) closeScanner();
+  });
+}
+
+/* ===== INIT ===== */
+function init(){
+  // Emergency reset: open the app URL with ?reset or #reset to wipe saved data
+  if(/[?&]reset\b/i.test(location.search) || /#reset/i.test(location.hash)){
+    try{ localStorage.removeItem(KEY); }catch(e){}
+    try{ history.replaceState(null, '', location.pathname); }catch(e){}
+  }
+  load();
+  processDayBoundaries();          // catch up any 17:00 / 9:00 boundaries since last open
+  setupOverlayDismiss();
+  renderMachineGrid();
+  renderScanned();
+  renderStatus();
+  renderMachineSettings();
+  clockTick();
+  notifyPendingCarry();            // non-blocking notice (no auto-popup)
+  setInterval(clockTick, 10000);
+  setInterval(tickBoundaries, 30000); // 17:00 auto-stop / 9:00 auto-start while open
+}
+init();
+</script>
+</body>
+</html>

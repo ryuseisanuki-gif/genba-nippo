@@ -1,0 +1,27 @@
+{
+  "name": "プレス日報",
+  "short_name": "プレス日報",
+  "description": "プレス加工工場の現場日報アプリ（機械別の実績・停止・生産個数を記録）",
+  "lang": "ja",
+  "dir": "ltr",
+  "start_url": "index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#16202e",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+# local dev tooling (machine-specific paths)
+.claude/
+
+# temp / generated
+check.js
+
+# data exports (do not publish records)
+*.csv
+
+# OS cruft
+Thumbs.db
+Desktop.ini
+.DS_Store
