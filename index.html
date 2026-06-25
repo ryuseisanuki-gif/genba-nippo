@@ -1331,7 +1331,18 @@ async function openScanner(){
       return;
     }
     try{
-      zxingReader = new ZXing.BrowserMultiFormatReader();
+      let zxHints = null;
+      try{
+        zxHints = new Map();
+        const BF = ZXing.BarcodeFormat;
+        zxHints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+          BF.CODE_128, BF.CODE_39, BF.ITF, BF.CODABAR,
+          BF.EAN_13, BF.EAN_8, BF.UPC_A, BF.UPC_E,
+          BF.QR_CODE, BF.DATA_MATRIX
+        ]);
+        zxHints.set(ZXing.DecodeHintType.TRY_HARDER, true); // 難しい/かすれた1Dバーコードの命中率を上げる
+      }catch(e){ zxHints = null; }
+      zxingReader = new ZXing.BrowserMultiFormatReader(zxHints);
       let devId = null;
       try{
         const devs = await zxingReader.listVideoInputDevices();
