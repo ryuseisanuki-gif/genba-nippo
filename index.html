@@ -69,6 +69,11 @@
   }
   header h1{font-size:16px;font-weight:900;letter-spacing:.04em;}
   header .clock{font-family:var(--mono);font-size:12px;color:#aab4c2;font-weight:500;text-align:right;}
+  header .hd-right{display:flex;align-items:center;gap:8px;}
+  #syncDot{width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#9aa4b0;transition:background .3s;}
+  #syncDot.sync-online{background:#1e8a3e;}
+  #syncDot.sync-offline{background:#9aa4b0;}
+  #syncDot.sync-connecting{background:#b5790a;}
 
   /* ── Tabs ── */
   .tabs{
@@ -435,7 +440,10 @@
     <div class="mark">⚙</div>
     <h1>プレス日報</h1>
   </div>
-  <div class="clock" id="clock">—</div>
+  <div class="hd-right">
+    <span id="syncDot" class="sync-connecting" title="接続中…"></span>
+    <div class="clock" id="clock">—</div>
+  </div>
 </header>
 
 <nav class="tabs">
@@ -613,6 +621,11 @@
 
 <div id="toast"></div>
 
+<!-- Firebase (CDN compat ビルド — バンドラ不要) -->
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
@@ -647,7 +660,82 @@ function load(){
     save();
   }
 }
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){} }
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){} if(initialSyncDone) syncPush(); }
+
+/* ===== CLOUD SYNC (Firebase Firestore + 匿名認証 / localStorage はオフライン用に併用) ===== */
+const firebaseConfig = {
+  apiKey: "AIzaSyCzPKN4JIoypHaSYv73nw_fPVFeqYh5Ot4",
+  authDomain: "dai6-eb66b.firebaseapp.com",
+  projectId: "dai6-eb66b",
+  storageBucket: "dai6-eb66b.firebasestorage.app",
+  messagingSenderId: "984544822288",
+  appId: "1:984544822288:web:2264697646f7b6df497695"
+};
+let db = null, fbReady = false, initialSyncDone = false;
+const firstSnap = { machines:false, records:false };
+const lastSynced = {};   // "machines/<id>" | "records/<id>" -> JSON文字列（エコー再送防止）
+
+function setSyncStatus(s){
+  const el = $('#syncDot'); if(!el) return;
+  el.className = 'sync-' + s;
+  el.title = s==='online' ? '同期中（オンライン）' : s==='offline' ? 'オフライン（この端末に保存）' : '接続中…';
+}
+function splitKey(k){ const i = k.indexOf('/'); return [k.slice(0,i), k.slice(i+1)]; }
+
+function initSync(){
+  if(!window.firebase || !firebaseConfig.apiKey){ setSyncStatus('offline'); return; }
+  try{
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    db.enablePersistence({ synchronizeTabs:true }).catch(()=>{}); // オフライン用ローカルキャッシュ
+    setSyncStatus('connecting');
+    firebase.auth().onAuthStateChanged(u=>{
+      if(u){ fbReady = true; setSyncStatus('online'); attachListeners(); }
+    });
+    firebase.auth().signInAnonymously().catch(e=>{ console.warn('anon auth failed', e); setSyncStatus('offline'); });
+  }catch(e){ console.warn('firebase init failed', e); setSyncStatus('offline'); }
+}
+function attachListeners(){
+  db.collection('machines').onSnapshot(s=>applySnap('machines', s), e=>{ console.warn('machines listen', e); setSyncStatus('offline'); });
+  db.collection('records').onSnapshot(s=>applySnap('records', s), e=>{ console.warn('records listen', e); setSyncStatus('offline'); });
+}
+function applySnap(kind, snap){
+  const arr = (kind==='machines') ? store.machines : store.records;
+  snap.docChanges().forEach(ch=>{
+    const id = ch.doc.id, data = ch.doc.data();
+    const i = arr.findIndex(x=>x.id===id);
+    if(ch.type==='removed'){ if(i>=0) arr.splice(i,1); delete lastSynced[kind+'/'+id]; }
+    else { if(i>=0) arr[i] = data; else arr.push(data); lastSynced[kind+'/'+id] = JSON.stringify(data); }
+  });
+  try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){}
+  firstSnap[kind] = true;
+  if(!initialSyncDone && firstSnap.machines && firstSnap.records){ initialSyncDone = true; syncPush(); }
+  if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
+  refreshActiveViews();
+}
+function syncPush(){
+  if(!fbReady || !db) return;
+  const cur = {};
+  store.machines.forEach(m=> cur['machines/'+m.id] = m);
+  store.records.forEach(r=> cur['records/'+r.id] = r);
+  // 追加・変更
+  Object.keys(cur).forEach(k=>{
+    const js = JSON.stringify(cur[k]);
+    if(lastSynced[k] !== js){
+      const [c,id] = splitKey(k);
+      db.collection(c).doc(id).set(JSON.parse(js)).catch(e=>console.warn('push', k, e));
+      lastSynced[k] = js;
+    }
+  });
+  // 削除（同期済みのものだけ）
+  Object.keys(lastSynced).forEach(k=>{
+    if(!(k in cur)){
+      const [c,id] = splitKey(k);
+      db.collection(c).doc(id).delete().catch(e=>console.warn('del', k, e));
+      delete lastSynced[k];
+    }
+  });
+}
 
 /* ===== STATE ===== */
 let selectedMachineId = null;
@@ -1660,6 +1748,7 @@ function init(){
   notifyPendingCarry();            // non-blocking notice (no auto-popup)
   setInterval(clockTick, 10000);
   setInterval(tickBoundaries, 30000); // 17:00 auto-stop / 9:00 auto-start while open
+  initSync();                          // クラウド同期を開始（失敗してもローカルで動作）
 }
 init();
 </script>
