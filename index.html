@@ -1310,6 +1310,7 @@ async function openScanner(){
   $('#scanModal').classList.add('active');
   $('#scanStatus').textContent = 'カメラを起動中…';
   scanning = true;
+  scanCandidate = null; scanCandidateHits = 0;
   const video = $('#scanVideo');
 
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
@@ -1325,7 +1326,7 @@ async function openScanner(){
     }
     video.srcObject = scanStream;
     try{ await video.play(); }catch(e){}
-    let fmts = ['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','data_matrix','upc_a','upc_e','pdf417','aztec'];
+    let fmts = ['code_39','code_128','qr_code','data_matrix']; // 現場仕様に限定（ITF/Codabar/EAN等の誤読源を除外）
     try{ const sup = await BarcodeDetector.getSupportedFormats(); fmts = fmts.filter(f=>sup.includes(f)); }catch(e){}
     const det = new BarcodeDetector({ formats: fmts.length?fmts:undefined });
     $('#scanStatus').textContent = '枠内にバーコードをかざしてください';
@@ -1342,10 +1343,8 @@ async function openScanner(){
         zxHints = new Map();
         const BF = ZXing.BarcodeFormat;
         zxHints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-          BF.CODE_128, BF.CODE_39, BF.ITF, BF.CODABAR,
-          BF.EAN_13, BF.EAN_8, BF.UPC_A, BF.UPC_E,
-          BF.QR_CODE, BF.DATA_MATRIX
-        ]);
+          BF.CODE_39, BF.CODE_128, BF.QR_CODE, BF.DATA_MATRIX
+        ]); // 現場仕様に限定（ITF/Codabar/EAN等の誤読源を除外）
         zxHints.set(ZXing.DecodeHintType.TRY_HARDER, true); // 難しい/かすれた1Dバーコードの命中率を上げる
       }catch(e){ zxHints = null; }
       zxingReader = new ZXing.BrowserMultiFormatReader(zxHints);
@@ -1375,14 +1374,22 @@ async function detectLoop(det, video){
   try{
     if(video.readyState>=2){
       const codes = await det.detect(video);
-      if(codes && codes.length){ onDetected(codes[0].rawValue); return; }
+      if(codes && codes.length) onDetected(codes[0].rawValue);
     }
   }catch(e){}
-  rafId = requestAnimationFrame(()=>detectLoop(det, video));
+  if(scanning) rafId = requestAnimationFrame(()=>detectLoop(det, video)); // 確定するまで読み続ける
 }
+let scanCandidate = null, scanCandidateHits = 0;
 function onDetected(text){
   if(!scanning) return;
+  text = (text||'').trim();
+  if(!text) return;
+  // 誤読防止：同じ値を2回連続で読めたときだけ確定（1回だけの偶発的な誤読を弾く）
+  if(text === scanCandidate){ scanCandidateHits++; }
+  else { scanCandidate = text; scanCandidateHits = 1; }
+  if(scanCandidateHits < 2){ $('#scanStatus').textContent = '確認中…そのままかざしてください'; return; }
   scanning = false;
+  scanCandidate = null; scanCandidateHits = 0;
   if(navigator.vibrate) navigator.vibrate(60);
   applyScan(text);
   closeScanner();
