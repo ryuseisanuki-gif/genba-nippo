@@ -1295,8 +1295,14 @@ function loadZxing(){
   return new Promise((res,rej)=>{
     if(window.ZXing) return res();
     const s = document.createElement('script');
-    s.src = 'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js';
-    s.onload = res; s.onerror = ()=>rej(new Error('zxing'));
+    s.src = 'zxing.min.js'; // 同梱（外部CDN非依存）。404時はunpkgへフォールバック
+    s.onerror = ()=>{
+      const s2 = document.createElement('script');
+      s2.src = 'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js';
+      s2.onload = res; s2.onerror = ()=>rej(new Error('zxing'));
+      document.head.appendChild(s2);
+    };
+    s.onload = res; // s.onerror は上で同梱→CDNフォールバックを設定済み
     document.head.appendChild(s);
   });
 }
@@ -1313,7 +1319,7 @@ async function openScanner(){
 
   if('BarcodeDetector' in window){
     try{
-      scanStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'} }, audio:false });
+      scanStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} }, audio:false });
     }catch(e){
       $('#scanStatus').textContent = camErr(e); return;
     }
