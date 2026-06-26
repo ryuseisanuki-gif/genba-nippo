@@ -74,6 +74,14 @@
   #syncDot.sync-online{background:#1e8a3e;}
   #syncDot.sync-offline{background:#9aa4b0;}
   #syncDot.sync-connecting{background:#b5790a;}
+  /* 自動アップデートのお知らせバー */
+  #updateBar{position:fixed;left:0;right:0;bottom:0;z-index:200;background:#1e8a3e;color:#fff;
+    padding:calc(10px + env(safe-area-inset-bottom,0px)) 14px 10px;display:flex;align-items:center;justify-content:center;
+    gap:12px;font-size:13px;font-weight:700;box-shadow:0 -2px 10px rgba(0,0,0,.18);}
+  #updateBar.hidden{display:none;}
+  #updateBar button{border:none;border-radius:8px;font-weight:800;font-family:inherit;}
+  #updateBar .u-go{background:#fff;color:#1e8a3e;padding:7px 16px;}
+  #updateBar .u-x{background:transparent;color:#fff;font-size:18px;line-height:1;padding:4px 8px;}
 
   /* ── Tabs ── */
   .tabs{
@@ -537,6 +545,8 @@
       別の端末へ移すときは「バックアップ」で書き出し →「バックアップ読込」で取り込めます（記録は統合されます）。
     </div>
   </div>
+
+  <div class="set-note" style="text-align:center;margin-top:4px;opacity:.65">バージョン <span id="appVer">—</span></div>
 </section>
 
 <!-- ===== SCANNER MODAL ===== -->
@@ -619,6 +629,11 @@
   </div>
 </div>
 
+<div id="updateBar" class="hidden">
+  <span>新しいバージョンがあります</span>
+  <button class="u-go" onclick="applyUpdate()">今すぐ更新</button>
+  <button class="u-x" onclick="$('#updateBar').classList.add('hidden')" aria-label="閉じる">×</button>
+</div>
 <div id="toast"></div>
 
 <!-- Firebase (CDN compat ビルド — バンドラ不要) -->
@@ -1755,6 +1770,22 @@ function setupOverlayDismiss(){
 }
 
 /* ===== INIT ===== */
+/* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
+const APP_VERSION = '2026-06-25.4';
+let updateLatest = null;
+async function checkForUpdate(){
+  try{
+    const r = await fetch('version.txt?cb=' + Date.now(), { cache:'no-store' });
+    if(!r.ok) return;
+    const v = (await r.text()).trim();
+    if(v && v !== APP_VERSION){ updateLatest = v; const b = $('#updateBar'); if(b) b.classList.remove('hidden'); }
+  }catch(e){}
+}
+function applyUpdate(){
+  const v = updateLatest || String(Date.now());
+  location.replace(location.pathname + '?v=' + encodeURIComponent(v)); // キャッシュを確実に回避して最新を取得
+}
+
 function init(){
   // Emergency reset: open the app URL with ?reset or #reset to wipe saved data
   if(/[?&]reset\b/i.test(location.search) || /#reset/i.test(location.hash)){
@@ -1773,6 +1804,10 @@ function init(){
   setInterval(clockTick, 10000);
   setInterval(tickBoundaries, 30000); // 17:00 auto-stop / 9:00 auto-start while open
   initSync();                          // クラウド同期を開始（失敗してもローカルで動作）
+  const av = $('#appVer'); if(av) av.textContent = APP_VERSION;
+  checkForUpdate();                                          // 起動時に新版チェック
+  setInterval(checkForUpdate, 180000);                       // 3分ごとにチェック
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkForUpdate(); }); // 復帰時もチェック
 }
 init();
 </script>
