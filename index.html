@@ -1325,7 +1325,7 @@ async function openScanner(){
   $('#scanModal').classList.add('active');
   $('#scanStatus').textContent = 'カメラを起動中…';
   scanning = true;
-  scanCandidate = null; scanCandidateHits = 0;
+  scanTally = {};
   const video = $('#scanVideo');
 
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
@@ -1333,7 +1333,13 @@ async function openScanner(){
     return;
   }
 
+  // 標準のBarcodeDetectorは Code39/128 を読める時だけ使う。読めないiOS等ではZXingに切替（映像だけ出て読まない問題の対策）
+  let useNative = false;
   if('BarcodeDetector' in window){
+    try{ const sup = await BarcodeDetector.getSupportedFormats(); useNative = sup.includes('code_39') || sup.includes('code_128'); }
+    catch(e){ useNative = false; }
+  }
+  if(useNative){
     try{
       scanStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} }, audio:false });
     }catch(e){
@@ -1394,17 +1400,17 @@ async function detectLoop(det, video){
   }catch(e){}
   if(scanning) rafId = requestAnimationFrame(()=>detectLoop(det, video)); // 確定するまで読み続ける
 }
-let scanCandidate = null, scanCandidateHits = 0;
+let scanTally = {};
 function onDetected(text){
   if(!scanning) return;
   text = (text||'').trim();
   if(!text) return;
-  // 誤読防止：同じ値を2回連続で読めたときだけ確定（1回だけの偶発的な誤読を弾く）
-  if(text === scanCandidate){ scanCandidateHits++; }
-  else { scanCandidate = text; scanCandidateHits = 1; }
-  if(scanCandidateHits < 2){ $('#scanStatus').textContent = '確認中…そのままかざしてください'; return; }
+  // 誤読防止：同じ値が2回出たら確定（連続でなくてもOK。ブレる誤読は弾きつつ正しい値は確定しやすく）
+  scanTally[text] = (scanTally[text] || 0) + 1;
+  $('#scanStatus').textContent = '確認中…「' + text + '」';
+  if(scanTally[text] < 2) return;
   scanning = false;
-  scanCandidate = null; scanCandidateHits = 0;
+  scanTally = {};
   if(navigator.vibrate) navigator.vibrate(60);
   applyScan(text);
   closeScanner();
@@ -1771,7 +1777,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-25.4';
+const APP_VERSION = '2026-06-25.5';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
