@@ -165,6 +165,12 @@
   }
   .btn-scan:active{transform:scale(.98);background:#0d1620;}
   .btn-scan .cam{font-size:22px;}
+  .scanned-input{
+    width:100%;box-sizing:border-box;background:var(--surface2);border:1px solid var(--line);
+    border-radius:11px;padding:14px;margin-bottom:11px;font-size:18px;font-family:var(--mono);color:var(--ink);
+  }
+  .scanned-input::placeholder{font-family:var(--sans);font-size:13px;color:var(--ink3);}
+  .scanned-input:focus{outline:none;border-color:var(--orange);}
   .manual{display:flex;gap:8px;margin-top:10px;align-items:center;}
   .manual::before{content:"または手入力";font-size:11px;color:var(--ink3);white-space:nowrap;}
   .manual input{
@@ -485,15 +491,11 @@
       <div class="step-title">バーコードを読み取る</div>
     </div>
     <div class="card scan-card">
-      <div class="scanned empty" id="scannedBox">バーコードを読み取ると品番が表示されます</div>
-      <button class="btn-scan" onclick="openScanner()"><span class="cam">📷</span>バーコードを読み取る</button>
-      <label class="btn-scan-photo">
-        <span class="cam">🖼️</span>写真で読み取る（うまく読めない時）
+      <input type="text" id="scannedBox" class="scanned-input" placeholder="バーコード読取／品番を手入力" autocomplete="off" inputmode="text">
+      <label class="btn-scan">
+        <span class="cam">📷</span>バーコードを読み取る
         <input type="file" accept="image/*" capture="environment" id="barcodePhoto" onchange="decodePhoto(event)" style="display:none">
       </label>
-      <div class="manual">
-        <input type="text" id="manualInput" placeholder="品番を入力" autocomplete="off" inputmode="text">
-      </div>
     </div>
   </div>
 
@@ -917,27 +919,16 @@ function parseScan(raw){
 }
 function applyScan(raw){
   scan = parseScan(raw);
-  $('#manualInput').value = scan.partNo;
+  $('#scannedBox').value = scan.partNo;
   renderScanned();
   renderStatus();
 }
 function renderScanned(){
   const box = $('#scannedBox');
-  if(!scan.partNo){
-    box.className = 'scanned empty';
-    box.textContent = 'バーコードを読み取ると品番が表示されます';
-    return;
-  }
-  box.className = 'scanned';
-  const meta = [];
-  if(scan.qty) meta.push(`<span class="sc-pill">指示数 <b>${esc(scan.qty)}</b></span>`);
-  if(scan.due) meta.push(`<span class="sc-pill">納期 <b>${esc(scan.due)}</b></span>`);
-  box.innerHTML = `
-    <div class="sc-part">${esc(scan.partNo)}</div>
-    ${scan.partName?`<div class="sc-name">${esc(scan.partName)}</div>`:''}
-    ${meta.length?`<div class="sc-meta">${meta.join('')}</div>`:''}`;
+  if(!box) return;
+  if(document.activeElement !== box) box.value = scan.partNo || ''; // 入力中は上書きしない
 }
-$('#manualInput').addEventListener('input', e=>{
+$('#scannedBox').addEventListener('input', e=>{
   const v = e.target.value;
   scan = { raw:v, partNo:v.trim(), partName:scan.partName, qty:scan.qty, due:scan.due };
   if(!v.trim()){ scan = {raw:'',partNo:'',partName:'',qty:'',due:''}; }
@@ -1307,7 +1298,7 @@ function confirmEnd(){
   closeEndSheet();
   toast('日報を記録しました','success');
   scan = {raw:'',partNo:'',partName:'',qty:'',due:''};
-  $('#manualInput').value = '';
+  $('#scannedBox').value = '';
   renderScanned();
   renderMachineGrid();
   renderStatus();
@@ -1348,7 +1339,9 @@ async function decodePhoto(ev){
     url = URL.createObjectURL(file);
     const result = await reader.decodeFromImageUrl(url);
     if(result && result.getText()){
-      applyScan(result.getText());
+      const raw = result.getText();
+      const val = raw.length > 1 ? raw.slice(0, -1) : raw; // 末尾1文字を除外
+      applyScan(val);
       if(navigator.vibrate) navigator.vibrate(60);
       toast('読み取りました','success');
     } else {
@@ -1816,7 +1809,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-25.6';
+const APP_VERSION = '2026-06-25.7';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
