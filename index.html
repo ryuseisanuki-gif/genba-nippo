@@ -82,6 +82,12 @@
   #updateBar button{border:none;border-radius:8px;font-weight:800;font-family:inherit;}
   #updateBar .u-go{background:#fff;color:#1e8a3e;padding:7px 16px;}
   #updateBar .u-x{background:transparent;color:#fff;font-size:18px;line-height:1;padding:4px 8px;}
+  /* 写真で読み取る（iOS向けの確実な代替手段） */
+  .btn-scan-photo{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:8px;
+    padding:11px;border:1.5px solid var(--ink);border-radius:12px;background:#fff;color:var(--ink);
+    font-weight:700;font-size:13.5px;cursor:pointer;box-sizing:border-box;}
+  .btn-scan-photo .cam{font-size:18px;}
+  .btn-scan-photo:active{background:var(--steel);}
 
   /* ── Tabs ── */
   .tabs{
@@ -481,6 +487,10 @@
     <div class="card scan-card">
       <div class="scanned empty" id="scannedBox">バーコードを読み取ると品番が表示されます</div>
       <button class="btn-scan" onclick="openScanner()"><span class="cam">📷</span>バーコードを読み取る</button>
+      <label class="btn-scan-photo">
+        <span class="cam">🖼️</span>写真で読み取る（うまく読めない時）
+        <input type="file" accept="image/*" capture="environment" id="barcodePhoto" onchange="decodePhoto(event)" style="display:none">
+      </label>
       <div class="manual">
         <input type="text" id="manualInput" placeholder="品番を入力" autocomplete="off" inputmode="text">
       </div>
@@ -1321,6 +1331,35 @@ function loadZxing(){
     document.head.appendChild(s);
   });
 }
+/* 写真で読み取る（純正カメラで撮影→静止画をデコード。iOSでライブ映像が読めない時の確実な代替） */
+async function decodePhoto(ev){
+  const file = ev.target.files && ev.target.files[0];
+  ev.target.value = '';                 // 同じ写真でも再選択できるよう毎回リセット
+  if(!file) return;
+  toast('画像を解析中…');
+  let url = null;
+  try{
+    await loadZxing();
+    const hints = new Map();
+    const BF = ZXing.BarcodeFormat;
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [BF.CODE_39, BF.CODE_128, BF.QR_CODE, BF.DATA_MATRIX]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const reader = new ZXing.BrowserMultiFormatReader(hints);
+    url = URL.createObjectURL(file);
+    const result = await reader.decodeFromImageUrl(url);
+    if(result && result.getText()){
+      applyScan(result.getText());
+      if(navigator.vibrate) navigator.vibrate(60);
+      toast('読み取りました','success');
+    } else {
+      toast('読み取れませんでした。バーコードを大きく・正面・ピントを合わせて撮ってください','error');
+    }
+  }catch(e){
+    toast('読み取れませんでした。バーコードを大きく・正面・ピントを合わせて撮ってください','error');
+  }finally{
+    if(url) URL.revokeObjectURL(url);
+  }
+}
 async function openScanner(){
   $('#scanModal').classList.add('active');
   $('#scanStatus').textContent = 'カメラを起動中…';
@@ -1777,7 +1816,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-25.5';
+const APP_VERSION = '2026-06-25.6';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
