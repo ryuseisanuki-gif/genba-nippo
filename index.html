@@ -1355,7 +1355,7 @@ async function decodePhoto(ev){
   }
 }
 let scanCanvas = null, scanCtx = null, zxLoopReader = null;
-const SCAN_ZOOM = 2;  // 2倍デジタルズーム（中央をクロップ）
+const SCAN_ZOOM = 1;  // 1倍（ズーム無し・通常表示）
 function makeZxLoopReader(){
   let hints = null;
   try{
@@ -1804,7 +1804,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-25.8';
+const APP_VERSION = '2026-06-25.9';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
