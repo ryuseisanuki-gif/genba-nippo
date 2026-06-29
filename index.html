@@ -171,6 +171,13 @@
   }
   .scanned-input::placeholder{font-family:var(--sans);font-size:13px;color:var(--ink3);}
   .scanned-input:focus{outline:none;border-color:var(--orange);}
+  /* コイル選択・在庫 */
+  .coil-row{display:flex;gap:8px;align-items:center;margin-top:10px;}
+  .coil-lab{font-size:12px;color:var(--ink3);white-space:nowrap;}
+  .coil-select{flex:1;background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:11px 12px;font-size:15px;color:var(--ink);font-family:var(--sans);}
+  .coil-select:focus{outline:none;border-color:var(--orange);}
+  .coil-stock{font-size:12px;color:var(--ink2);white-space:nowrap;display:flex;align-items:center;gap:4px;}
+  .coil-stock-input{width:60px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-family:var(--mono);font-size:14px;text-align:right;color:var(--ink);}
   .manual{display:flex;gap:8px;margin-top:10px;align-items:center;}
   .manual::before{content:"または手入力";font-size:11px;color:var(--ink3);white-space:nowrap;}
   .manual input{
@@ -497,6 +504,10 @@
         <span class="cam">🖼️</span>写真で読み取る（うまく読めない時）
         <input type="file" accept="image/*" capture="environment" id="barcodePhoto" onchange="decodePhoto(event)" style="display:none">
       </label>
+      <div class="coil-row">
+        <span class="coil-lab">🧵 コイル</span>
+        <select id="coilSelect" class="coil-select" onchange="onCoilSelect()"></select>
+      </div>
     </div>
   </div>
 
@@ -542,6 +553,17 @@
       <button class="btn-add" onclick="addMachine()">追加</button>
     </div>
     <div class="set-note">機番は入力画面の選択ボタンに表示されます。例：P-101</div>
+  </div>
+
+  <div class="card set-card">
+    <h3>🧵 コイルの登録・在庫</h3>
+    <div id="coilSettingsList"></div>
+    <div class="add-row">
+      <input type="text" id="newCoilName" placeholder="コイル名称" autocomplete="off">
+      <input type="number" id="newCoilStock" class="mi" inputmode="numeric" placeholder="在庫数">
+      <button class="btn-add" onclick="addCoil()">追加</button>
+    </div>
+    <div class="set-note">入力画面でコイルを選べます。停止理由「コイル交換」で在庫が1減ります。</div>
   </div>
 
   <div class="card set-card">
@@ -602,6 +624,7 @@
       <button class="chip" onclick="selStopChip(this)">品質不良</button>
       <button class="chip" onclick="selStopChip(this)">段取り替え</button>
       <button class="chip" onclick="selStopChip(this)">作業者不在</button>
+      <button class="chip" onclick="selStopChip(this)">コイル交換</button>
       <button class="chip" onclick="selStopChip(this)">その他</button>
     </div>
     <input type="text" class="note-input" id="stopDetail" placeholder="詳細メモ（任意）" autocomplete="off">
@@ -659,13 +682,14 @@
 const $ = s => document.querySelector(s);
 
 /* ===== STORE ===== */
-let store = { machines: [], records: [] };
+let store = { machines: [], records: [], coils: [] };
 const KEY = 'genbaNippoData_v1';
 
 function load(){
   try{ const s = localStorage.getItem(KEY); if(s) store = JSON.parse(s); }catch(e){}
   if(!store.machines) store.machines = [];
   if(!store.records) store.records = [];
+  if(!Array.isArray(store.coils)) store.coils = [];
   store.records.forEach(r=>{
     if(!Array.isArray(r.stops)) r.stops = [];
     if(!('lastRunEnd' in r)) r.lastRunEnd = null;
@@ -700,7 +724,7 @@ const firebaseConfig = {
   appId: "1:984544822288:web:2264697646f7b6df497695"
 };
 let db = null, fbReady = false, initialSyncDone = false;
-const firstSnap = { machines:false, records:false };
+const firstSnap = { machines:false, records:false, coils:false };
 const lastSynced = {};   // "machines/<id>" | "records/<id>" -> JSON文字列（エコー再送防止）
 
 function setSyncStatus(s){
@@ -726,9 +750,10 @@ function initSync(){
 function attachListeners(){
   db.collection('machines').onSnapshot(s=>applySnap('machines', s), e=>{ console.warn('machines listen', e); setSyncStatus('offline'); });
   db.collection('records').onSnapshot(s=>applySnap('records', s), e=>{ console.warn('records listen', e); setSyncStatus('offline'); });
+  db.collection('coils').onSnapshot(s=>applySnap('coils', s), e=>{ console.warn('coils listen', e); setSyncStatus('offline'); });
 }
 function applySnap(kind, snap){
-  const arr = (kind==='machines') ? store.machines : store.records;
+  const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : store.records;
   snap.docChanges().forEach(ch=>{
     const id = ch.doc.id, data = ch.doc.data();
     const i = arr.findIndex(x=>x.id===id);
@@ -737,7 +762,7 @@ function applySnap(kind, snap){
   });
   try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){}
   firstSnap[kind] = true;
-  if(!initialSyncDone && firstSnap.machines && firstSnap.records){ initialSyncDone = true; syncPush(); }
+  if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils){ initialSyncDone = true; syncPush(); }
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
 }
@@ -746,6 +771,7 @@ function syncPush(){
   const cur = {};
   store.machines.forEach(m=> cur['machines/'+m.id] = m);
   store.records.forEach(r=> cur['records/'+r.id] = r);
+  store.coils.forEach(c=> cur['coils/'+c.id] = c);
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -767,6 +793,7 @@ function syncPush(){
 
 /* ===== STATE ===== */
 let selectedMachineId = null;
+let selectedCoilId = null;
 let scan = { raw:'', partNo:'', partName:'', qty:'', due:'' };
 let summaryDate = (()=>{ const d=new Date(); d.setHours(0,0,0,0); return d; })();
 const STD_START_H = 9, STD_END_H = 17, STD_MIN = (STD_END_H - STD_START_H) * 60;
@@ -890,6 +917,7 @@ function selectMachine(id){
   $('#selHint').textContent = selectedMachineId ? selectedMachineId : '未選択';
   renderMachineGrid();
   renderStatus();
+  renderCoilSelect();
 }
 
 /* ===== SCAN DISPLAY ===== */
@@ -1101,12 +1129,14 @@ function startJob(){
     stops: [],
     dailyCounts: [],
     note: '',
+    coilId: selectedCoilId || null,
     status: 'running'
   });
   save();
   toast('作業を開始しました','success');
   renderMachineGrid();
   renderStatus();
+  renderCoilSelect();
 }
 
 /* ===== STOP / RESUME ===== */
@@ -1127,13 +1157,21 @@ function confirmStop(){
   if(!run){ closeStopSheet(); return; }
   const chip = document.querySelector('#stopChips .chip.sel');
   if(!chip){ toast('停止の理由を選んでください','error'); return; }
-  run.stops.push({ reason: chip.textContent, detail: $('#stopDetail').value.trim(), from: new Date().toISOString(), to: null });
+  const reason = chip.textContent;
+  run.stops.push({ reason, detail: $('#stopDetail').value.trim(), from: new Date().toISOString(), to: null });
   run.status = 'stopped';
+  let stockMsg = '';
+  if(reason === 'コイル交換'){
+    const c = store.coils.find(x=>x.id===run.coilId);
+    if(c){ c.stock = (c.stock||0) - 1; stockMsg = `（${c.name} 残${c.stock}）`; }
+    else { stockMsg = '（コイル未選択：在庫変動なし）'; }
+  }
   save();
   closeStopSheet();
-  toast('作業を停止しました');
+  toast('作業を停止しました' + stockMsg);
   renderMachineGrid();
   renderStatus();
+  renderCoilSelect();
 }
 function resumeJob(){
   const r = selectedMachineId ? stoppedFor(selectedMachineId) : null;
@@ -1251,8 +1289,10 @@ function submitCarry(action){
 function refreshActiveViews(){
   renderMachineGrid();
   renderStatus();
+  renderCoilSelect();
   if($('#page-summary').classList.contains('active')) renderSummary();
   if($('#page-records').classList.contains('active')) renderRecords();
+  if($('#page-settings').classList.contains('active')) renderCoilSettings();
 }
 // periodic + on-demand boundary check (non-blocking: just notify, never auto-popup)
 function tickBoundaries(){
@@ -1768,6 +1808,57 @@ async function deleteMachine(id){
   save(); renderMachineSettings(); renderMachineGrid(); renderStatus();
   toast('削除しました');
 }
+/* ===== COILS（コイル在庫） ===== */
+function renderCoilSelect(){
+  const sel = $('#coilSelect'); if(!sel) return;
+  const active = selectedMachineId ? activeFor(selectedMachineId) : null;
+  const want = (active && active.coilId) ? active.coilId : (selectedCoilId || '');
+  sel.innerHTML = '<option value="">（コイル未選択）</option>' +
+    store.coils.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}（残${c.stock}）</option>`).join('');
+  sel.value = want;
+  if(sel.value !== want) sel.value = '';   // 選択中コイルが削除された場合
+  selectedCoilId = sel.value || null;
+}
+function onCoilSelect(){
+  const sel = $('#coilSelect'); if(!sel) return;
+  selectedCoilId = sel.value || null;
+  const active = selectedMachineId ? activeFor(selectedMachineId) : null;
+  if(active){ active.coilId = selectedCoilId; save(); }
+}
+function renderCoilSettings(){
+  const el = $('#coilSettingsList'); if(!el) return;
+  if(!store.coils.length){ el.innerHTML = '<div class="set-note">コイルが未登録です。下から追加してください。</div>'; return; }
+  el.innerHTML = store.coils.map(c=>`
+    <div class="mset">
+      <span class="mi-name" style="flex:1">${esc(c.name)}</span>
+      <span class="coil-stock">残 <input type="number" inputmode="numeric" class="coil-stock-input" value="${esc(c.stock)}" onchange="updateCoilStock('${esc(c.id)}', this.value)"></span>
+      <button class="x" onclick="deleteCoil('${esc(c.id)}')">✕</button>
+    </div>`).join('');
+}
+function addCoil(){
+  const name = $('#newCoilName').value.trim();
+  const n = parseInt($('#newCoilStock').value);
+  if(!name){ toast('コイル名称を入力してください','error'); return; }
+  store.coils.push({ id: 'c'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), name, stock: isNaN(n)?0:n });
+  save();
+  $('#newCoilName').value=''; $('#newCoilStock').value='';
+  renderCoilSettings(); renderCoilSelect();
+  toast('コイルを追加しました','success');
+}
+function updateCoilStock(id, val){
+  const c = store.coils.find(x=>x.id===id); if(!c) return;
+  const n = parseInt(val); c.stock = isNaN(n)?0:n;
+  save(); renderCoilSelect();
+}
+async function deleteCoil(id){
+  const c = store.coils.find(x=>x.id===id);
+  const ok = await confirmDialog('コイルの削除', `${c?c.name:''} を削除します。`, '削除する', true);
+  if(!ok) return;
+  store.coils = store.coils.filter(x=>x.id!==id);
+  if(selectedCoilId===id) selectedCoilId=null;
+  save(); renderCoilSettings(); renderCoilSelect();
+  toast('削除しました');
+}
 async function clearRecords(){
   if(!store.records.length){ toast('記録がありません'); return; }
   const ok = await confirmDialog('記録の全削除',`記録 ${store.records.length}件 をすべて削除します。この操作は元に戻せません。`,'すべて削除',true);
@@ -1804,7 +1895,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-25.9';
+const APP_VERSION = '2026-06-26.1';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
@@ -1832,6 +1923,8 @@ function init(){
   renderScanned();
   renderStatus();
   renderMachineSettings();
+  renderCoilSettings();
+  renderCoilSelect();
   clockTick();
   notifyPendingCarry();            // non-blocking notice (no auto-popup)
   setInterval(clockTick, 10000);
