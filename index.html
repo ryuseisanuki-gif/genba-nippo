@@ -1650,6 +1650,42 @@ function summaryFor(machineId, dayDate){
   return { runMin, notRun, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, qty, finishedCount, rate, reasons };
 }
 
+// 実時刻ベースの帯グラフ用タイムライン（9:00–17:00を1分刻みで run/stop/remain に色分け）
+function summaryTimeline(machineId, dayDate){
+  const ws = new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT = ws.getTime();
+  const weFull = new Date(dayDate); weFull.setHours(STD_END_H,0,0,0); const weFullT = weFull.getTime();
+  const now = Date.now();
+  const total = Math.max(1, Math.round((weFullT - wsT)/60000));
+  const recs = store.records.filter(r=>r.machineId===machineId);
+  const state = new Array(total);
+  for(let i=0;i<total;i++){
+    const t = wsT + i*60000;
+    if(t >= now){ state[i] = 'remain'; continue; }   // 当日まだ来ていない時間
+    let s = 'stop';
+    for(const r of recs){
+      const rs = new Date(r.startTime).getTime();
+      const re = endRefT(r);
+      if(t >= rs && t < re){
+        let stopped = false;
+        (r.stops||[]).forEach(stp=>{
+          const sf = new Date(stp.from).getTime();
+          const stt = stp.to ? new Date(stp.to).getTime() : re;
+          if(t >= sf && t < stt) stopped = true;
+        });
+        s = stopped ? 'stop' : 'run';
+        break;
+      }
+    }
+    state[i] = s;
+  }
+  const segs = [];
+  for(let i=0;i<total;i++){
+    if(segs.length && segs[segs.length-1].state === state[i]) segs[segs.length-1].n++;
+    else segs.push({ state: state[i], n: 1 });
+  }
+  return segs.map(g=>({ state: g.state, pct: g.n/total*100 }));
+}
+
 function renderSummary(){
   const d = summaryDate;
   const today = new Date(); today.setHours(0,0,0,0);
@@ -1692,9 +1728,7 @@ function renderSummary(){
         <span class="srate ${rateCls}">稼働率 ${s.rate==null?'—':s.rate+'%'}</span>
       </div>
       <div class="sum-bar">
-        ${runPct>0?`<div class="seg run" style="width:${runPct}%"></div>`:''}
-        ${stopPct>0?`<div class="seg stop" style="width:${stopPct}%"></div>`:''}
-        ${remPct>0?`<div class="seg remain" style="width:${remPct}%"></div>`:''}
+        ${summaryTimeline(m.id, d).map(seg=>`<div class="seg ${seg.state}" style="width:${seg.pct}%"></div>`).join('')}
       </div>
       <div class="sum-scale"><span>9:00</span><span>13:00</span><span>17:00</span></div>
       <div class="sum-stats">
@@ -1895,7 +1929,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-26.1';
+const APP_VERSION = '2026-06-26.2';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
