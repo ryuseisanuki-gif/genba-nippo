@@ -1602,86 +1602,94 @@ function goToday(){
 }
 function clipMin(s,e,ws,we){ const a=Math.max(s,ws), b=Math.min(e,we); return Math.max(0,(b-a)/60000); }
 
-// Compute one machine's stats for the given calendar day, against the 9:00–17:00 standard window.
-function summaryFor(machineId, dayDate){
-  const ws = new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT = ws.getTime();
-  const weFull = new Date(dayDate); weFull.setHours(STD_END_H,0,0,0); const weFullT = weFull.getTime();
-  const now = Date.now();
-  const weEff = Math.min(weFullT, now);           // count only elapsed standard-time
-  const elapsedMin = Math.max(0, (weEff - wsT)/60000);
-
-  const dayS = new Date(dayDate); dayS.setHours(0,0,0,0);
-  const dayE = new Date(dayDate); dayE.setHours(23,59,59,999);
-
-  let runMin = 0, loggedStopMin = 0, qty = 0, finishedCount = 0;
-  const reasons = {};
-  const dayKey = dateKey(new Date(dayDate));
-
-  store.records.forEach(r=>{
-    if(r.machineId !== machineId) return;
-    const startT = new Date(r.startTime).getTime();
-    const endT = endRefT(r);   // endTime, else last force-stop, else now
-
-    // time inside the measured window [wsT, weEff]
-    if(elapsedMin > 0 && startT < weEff && endT > wsT){
-      const span = clipMin(startT, endT, wsT, weEff);
-      let st = 0;
-      (r.stops||[]).forEach(s=>{
-        const sf = new Date(s.from).getTime();
-        const stt = s.to ? new Date(s.to).getTime() : endT;
-        const m = clipMin(sf, stt, wsT, weEff);
-        if(m > 0){ st += m; reasons[s.reason] = (reasons[s.reason]||0) + m; }
-      });
-      loggedStopMin += st;
-      runMin += Math.max(0, span - st);
-    }
-
-    // pieces: attribute each day's entered count to that day
-    (r.dailyCounts||[]).forEach(d=>{
-      if(d.date === dayKey){ qty += (d.qty||0); finishedCount++; }
-    });
+/* 休憩（強制停止扱い）: 12:00-12:45 と 15:00-15:15 */
+const BREAKS = [ {sh:12,sm:0,eh:12,em:45}, {sh:15,sm:0,eh:15,em:15} ];
+function inBreak(dayDate, t){
+  return BREAKS.some(b=>{
+    const s=new Date(dayDate); s.setHours(b.sh,b.sm,0,0);
+    const e=new Date(dayDate); e.setHours(b.eh,b.em,0,0);
+    return t>=s.getTime() && t<e.getTime();
   });
-
-  runMin = Math.round(runMin);
-  const elapsed = Math.round(elapsedMin);
-  const notRun = Math.max(0, elapsed - runMin);          // 止まっている（停止＋空き）
-  const remain = Math.max(0, STD_MIN - elapsed);          // まだ来ていない時間（当日進行中）
-  const rate = elapsed > 0 ? Math.round(runMin/elapsed*100) : null;
-  return { runMin, notRun, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, qty, finishedCount, rate, reasons };
 }
-
-// 実時刻ベースの帯グラフ用タイムライン（9:00–17:00を1分刻みで run/stop/remain に色分け）
-function summaryTimeline(machineId, dayDate){
-  const ws = new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT = ws.getTime();
-  const weFull = new Date(dayDate); weFull.setHours(STD_END_H,0,0,0); const weFullT = weFull.getTime();
-  const now = Date.now();
-  const total = Math.max(1, Math.round((weFullT - wsT)/60000));
-  const recs = store.records.filter(r=>r.machineId===machineId);
-  const state = new Array(total);
+// 9:00–17:00 を1分刻みで判定（run/stop/remain）。休憩は常に stop（＝強制停止）。数値・帯グラフ共通。
+function machineDayStates(machineId, dayDate){
+  const ws=new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT=ws.getTime();
+  const weFull=new Date(dayDate); weFull.setHours(STD_END_H,0,0,0); const weFullT=weFull.getTime();
+  const now=Date.now();
+  const total=Math.max(1, Math.round((weFullT-wsT)/60000));
+  const recs=store.records.filter(r=>r.machineId===machineId);
+  const states=new Array(total);
   for(let i=0;i<total;i++){
-    const t = wsT + i*60000;
-    if(t >= now){ state[i] = 'remain'; continue; }   // 当日まだ来ていない時間
-    let s = 'stop';
+    const t=wsT+i*60000;
+    if(t>=now){ states[i]='remain'; continue; }        // 当日まだ来ていない
+    if(inBreak(dayDate,t)){ states[i]='stop'; continue; } // 休憩＝強制停止
+    let s='stop';
     for(const r of recs){
-      const rs = new Date(r.startTime).getTime();
-      const re = endRefT(r);
-      if(t >= rs && t < re){
-        let stopped = false;
+      const rs=new Date(r.startTime).getTime();
+      const re=endRefT(r);
+      if(t>=rs && t<re){
+        let stopped=false;
         (r.stops||[]).forEach(stp=>{
-          const sf = new Date(stp.from).getTime();
-          const stt = stp.to ? new Date(stp.to).getTime() : re;
-          if(t >= sf && t < stt) stopped = true;
+          const sf=new Date(stp.from).getTime();
+          const stt=stp.to?new Date(stp.to).getTime():re;
+          if(t>=sf && t<stt) stopped=true;
         });
-        s = stopped ? 'stop' : 'run';
+        s=stopped?'stop':'run';
         break;
       }
     }
-    state[i] = s;
+    states[i]=s;
   }
+  return { states, total, wsT };
+}
+
+// Compute one machine's stats for the given calendar day (休憩は停止として計上).
+function summaryFor(machineId, dayDate){
+  const { states, total } = machineDayStates(machineId, dayDate);
+  let runMin=0, remainCount=0;
+  states.forEach(s=>{ if(s==='run') runMin++; else if(s==='remain') remainCount++; });
+  const elapsed = total - remainCount;
+  const notRun = Math.max(0, elapsed - runMin);
+  const remain = remainCount;
+  const rate = elapsed>0 ? Math.round(runMin/elapsed*100) : null;
+
+  // 停止理由の内訳・生産個数
+  const ws=new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT=ws.getTime();
+  const weFull=new Date(dayDate); weFull.setHours(STD_END_H,0,0,0);
+  const now=Date.now(); const weEff=Math.min(weFull.getTime(), now);
+  const dayKey=dateKey(new Date(dayDate));
+  let loggedStopMin=0, qty=0, finishedCount=0; const reasons={};
+  store.records.forEach(r=>{
+    if(r.machineId!==machineId) return;
+    const endT=endRefT(r);
+    (r.stops||[]).forEach(s=>{
+      const sf=new Date(s.from).getTime();
+      const stt=s.to?new Date(s.to).getTime():endT;
+      const m=clipMin(sf,stt,wsT,weEff);
+      if(m>0){ loggedStopMin+=m; reasons[s.reason]=(reasons[s.reason]||0)+m; }
+    });
+    (r.dailyCounts||[]).forEach(d=>{ if(d.date===dayKey){ qty+=(d.qty||0); finishedCount++; } });
+  });
+  // 休憩（経過ぶん）を内訳に表示（稼働した機械のみ）
+  if(runMin>0){
+    let breakMin=0;
+    BREAKS.forEach(b=>{
+      const bs=new Date(dayDate); bs.setHours(b.sh,b.sm,0,0);
+      const be=new Date(dayDate); be.setHours(b.eh,b.em,0,0);
+      breakMin += clipMin(bs.getTime(), be.getTime(), wsT, weEff);
+    });
+    if(breakMin>0) reasons['休憩'] = Math.round(breakMin);
+  }
+  return { runMin, notRun, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, qty, finishedCount, rate, reasons };
+}
+
+// 実時刻ベースの帯グラフ用タイムライン（machineDayStates を run/stop/remain の帯に集約）
+function summaryTimeline(machineId, dayDate){
+  const { states, total } = machineDayStates(machineId, dayDate);
   const segs = [];
   for(let i=0;i<total;i++){
-    if(segs.length && segs[segs.length-1].state === state[i]) segs[segs.length-1].n++;
-    else segs.push({ state: state[i], n: 1 });
+    if(segs.length && segs[segs.length-1].state === states[i]) segs[segs.length-1].n++;
+    else segs.push({ state: states[i], n: 1 });
   }
   return segs.map(g=>({ state: g.state, pct: g.n/total*100 }));
 }
@@ -1929,7 +1937,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-26.2';
+const APP_VERSION = '2026-06-26.3';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
