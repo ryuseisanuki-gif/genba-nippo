@@ -1295,9 +1295,46 @@ function refreshActiveViews(){
   if($('#page-settings').classList.contains('active')) renderCoilSettings();
 }
 // periodic + on-demand boundary check (non-blocking: just notify, never auto-popup)
+// 休憩の自動停止/再開（12:00-12:45, 15:00-15:15）。アプリが開いている間だけ動作（集計は常に休憩控除）。
+function processBreaks(){
+  const now = Date.now();
+  let changed = false;
+  BREAKS.forEach(b=>{
+    const bs=new Date(); bs.setHours(b.sh,b.sm,0,0); const bsT=bs.getTime();
+    const be=new Date(); be.setHours(b.eh,b.em,0,0); const beT=be.getTime();
+    if(now >= bsT && now < beT){
+      // 休憩中：稼働中の作業を「休憩」で自動停止
+      store.records.forEach(r=>{
+        if(r.status!=='running') return;
+        r.stops = r.stops || [];
+        const handled = r.stops.some(s=> s.reason==='休憩' && new Date(s.from).getTime()>=bsT && new Date(s.from).getTime()<beT);
+        if(!handled){
+          const from = Math.max(bsT, new Date(r.sessionStart||r.startTime).getTime());
+          r.stops.push({ reason:'休憩', detail:'', from:new Date(from).toISOString(), to:null });
+          r.status='stopped';
+          changed=true;
+        }
+      });
+    } else if(now >= beT){
+      // 休憩後：休憩で止めた作業を自動再開
+      store.records.forEach(r=>{
+        if(r.status!=='stopped') return;
+        const os = r.stops && r.stops.find(s=>!s.to);
+        if(os && os.reason==='休憩' && new Date(os.from).getTime()>=bsT && new Date(os.from).getTime()<beT){
+          os.to = new Date(beT).toISOString();
+          r.status='running';
+          changed=true;
+        }
+      });
+    }
+  });
+  if(changed) save();
+  return changed;
+}
 function tickBoundaries(){
   const changed = processDayBoundaries();
-  if(changed){ refreshActiveViews(); notifyPendingCarry(); }
+  const brk = processBreaks();
+  if(changed || brk){ refreshActiveViews(); notifyPendingCarry(); }
 }
 
 function openEndSheet(){
@@ -1937,7 +1974,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-26.3';
+const APP_VERSION = '2026-06-26.4';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
@@ -1960,6 +1997,7 @@ function init(){
   }
   load();
   processDayBoundaries();          // catch up any 17:00 / 9:00 boundaries since last open
+  processBreaks();                 // 休憩(12:00-12:45 / 15:00-15:15)の自動停止/再開をキャッチアップ
   setupOverlayDismiss();
   renderMachineGrid();
   renderScanned();
