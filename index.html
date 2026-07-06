@@ -319,6 +319,12 @@
   .sum-bar .seg.run{background:var(--run);}
   .sum-bar .seg.stop{background:var(--pause);}
   .sum-bar .seg.remain{background:repeating-linear-gradient(45deg,#e3e8ef,#e3e8ef 5px,#eef1f5 5px,#eef1f5 10px);}
+  .sum-bar .seg.break{background:#4a6fd0;}
+  .sum-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px;color:var(--ink3);}
+  .sum-legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px;}
+  .sum-legend i.run{background:var(--run);}
+  .sum-legend i.stop{background:var(--pause);}
+  .sum-legend i.break{background:#4a6fd0;}
   .sum-scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--ink3);margin-top:3px;padding:0 1px;}
   .sum-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:13px;}
   .ss{background:var(--surface2);border-radius:10px;padding:9px 8px;text-align:center;}
@@ -703,14 +709,7 @@ function load(){
       }
     }
   });
-  if(!store.machines.length){
-    store.machines = [
-      {id:'P-101', name:'100tプレス'},
-      {id:'P-102', name:'200tプレス'},
-      {id:'P-103', name:'50tプレス'},
-    ];
-    save();
-  }
+  // 既定機械の自動生成は廃止（削除しても復活しないように）。機械は設定タブで登録する。
 }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){} if(initialSyncDone) syncPush(); }
 
@@ -996,12 +995,13 @@ function renderStatus(){
 
   if(paused){
     const os = openStop(paused) || {};
+    const isBreakStop = os.reason==='休憩';
     panel.innerHTML = `
       <div class="status stopped">
-        <div class="st-strip"><span class="d"></span>停止中 — ${esc(paused.machineId)}</div>
+        <div class="st-strip"><span class="d"></span>${isBreakStop?'休憩中':'停止中'} — ${esc(paused.machineId)}</div>
         <div class="st-body">
           <div class="timer paused" id="liveTimer">00:00:00</div>
-          <div class="stop-reason-tag">⏸ ${esc(os.reason||'停止')}${os.detail?'：'+esc(os.detail):''}</div>
+          <div class="stop-reason-tag">${isBreakStop?'☕ 休憩中 — 動かす場合は「再開」を押してください':'⏸ '+esc(os.reason||'停止')+(os.detail?'：'+esc(os.detail):'')}</div>
           <div class="timer-sub">品番 <b>${esc(paused.partNo)}</b>${paused.partName?' / '+esc(paused.partName):''}<br>開始 <b>${fmtT(paused.startTime)}</b> ・ 停止 <b>${os.from?fmtT(os.from):'-'}</b></div>
         </div>
         <div style="padding:0 16px 18px">
@@ -1659,7 +1659,6 @@ function machineDayStates(machineId, dayDate){
   for(let i=0;i<total;i++){
     const t=wsT+i*60000;
     if(t>=now){ states[i]='remain'; continue; }        // 当日まだ来ていない
-    if(inBreak(dayDate,t)){ states[i]='stop'; continue; } // 休憩＝強制停止
     let s='stop';
     for(const r of recs){
       const rs=new Date(r.startTime).getTime();
@@ -1675,6 +1674,7 @@ function machineDayStates(machineId, dayDate){
         break;
       }
     }
+    if(inBreak(dayDate,t) && s!=='run') s='break';   // 休憩中は（動かしていなければ）休憩扱い（別色）
     states[i]=s;
   }
   return { states, total, wsT };
@@ -1683,8 +1683,8 @@ function machineDayStates(machineId, dayDate){
 // Compute one machine's stats for the given calendar day (休憩は停止として計上).
 function summaryFor(machineId, dayDate){
   const { states, total } = machineDayStates(machineId, dayDate);
-  let runMin=0, remainCount=0;
-  states.forEach(s=>{ if(s==='run') runMin++; else if(s==='remain') remainCount++; });
+  let runMin=0, breakMin=0, remainCount=0;
+  states.forEach(s=>{ if(s==='run') runMin++; else if(s==='break') breakMin++; else if(s==='remain') remainCount++; });
   const elapsed = total - remainCount;
   const notRun = Math.max(0, elapsed - runMin);
   const remain = remainCount;
@@ -1707,16 +1707,8 @@ function summaryFor(machineId, dayDate){
     });
     (r.dailyCounts||[]).forEach(d=>{ if(d.date===dayKey){ qty+=(d.qty||0); finishedCount++; } });
   });
-  // 休憩（経過ぶん）を内訳に表示（稼働した機械のみ）
-  if(runMin>0){
-    let breakMin=0;
-    BREAKS.forEach(b=>{
-      const bs=new Date(dayDate); bs.setHours(b.sh,b.sm,0,0);
-      const be=new Date(dayDate); be.setHours(b.eh,b.em,0,0);
-      breakMin += clipMin(bs.getTime(), be.getTime(), wsT, weEff);
-    });
-    if(breakMin>0) reasons['休憩'] = Math.round(breakMin);
-  }
+  // 休憩を内訳に表示（稼働した機械のみ。休憩中に動かした時間は稼働として計上され休憩から外れる）
+  if(runMin>0 && breakMin>0) reasons['休憩'] = breakMin;
   return { runMin, notRun, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, qty, finishedCount, rate, reasons };
 }
 
@@ -1776,6 +1768,7 @@ function renderSummary(){
         ${summaryTimeline(m.id, d).map(seg=>`<div class="seg ${seg.state}" style="width:${seg.pct}%"></div>`).join('')}
       </div>
       <div class="sum-scale"><span>9:00</span><span>13:00</span><span>17:00</span></div>
+      <div class="sum-legend"><span><i class="run"></i>動いている</span><span><i class="stop"></i>止まっている</span><span><i class="break"></i>休憩</span></div>
       <div class="sum-stats">
         <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
         <div class="ss"><div class="lab"><span class="dot stop"></span>止まっている</div><div class="val stop">${durLabel(s.notRun)}</div></div>
@@ -1974,7 +1967,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-26.4';
+const APP_VERSION = '2026-06-26.5';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
