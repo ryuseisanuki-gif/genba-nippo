@@ -1648,6 +1648,14 @@ function inBreak(dayDate, t){
     return t>=s.getTime() && t<e.getTime();
   });
 }
+function breakWindowAt(dayDate, t){
+  for(const b of BREAKS){
+    const bs=new Date(dayDate); bs.setHours(b.sh,b.sm,0,0);
+    const be=new Date(dayDate); be.setHours(b.eh,b.em,0,0);
+    if(t>=bs.getTime() && t<be.getTime()) return { bs:bs.getTime(), be:be.getTime() };
+  }
+  return null;
+}
 // 9:00–17:00 を1分刻みで判定（run/stop/remain）。休憩は常に stop（＝強制停止）。数値・帯グラフ共通。
 function machineDayStates(machineId, dayDate){
   const ws=new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT=ws.getTime();
@@ -1659,12 +1667,12 @@ function machineDayStates(machineId, dayDate){
   for(let i=0;i<total;i++){
     const t=wsT+i*60000;
     if(t>=now){ states[i]='remain'; continue; }        // 当日まだ来ていない
-    if(inBreak(dayDate,t)){ states[i]='break'; continue; }   // 休憩は常に休憩（強制停止・稼働から除外）
-    let s='stop';
+    let s='stop', activeRec=null;
     for(const r of recs){
       const rs=new Date(r.startTime).getTime();
       const re=endRefT(r);
       if(t>=rs && t<re){
+        activeRec=r;
         let stopped=false;
         (r.stops||[]).forEach(stp=>{
           const sf=new Date(stp.from).getTime();
@@ -1673,6 +1681,16 @@ function machineDayStates(machineId, dayDate){
         });
         s=stopped?'stop':'run';
         break;
+      }
+    }
+    if(inBreak(dayDate,t)){
+      // 休憩中：動いていなければ休憩。動いていても「休憩停止から明示的に再開した後」だけ稼働(緑)にする
+      if(s==='run'){
+        const bw = breakWindowAt(dayDate, t);
+        const resumed = bw && activeRec && (activeRec.stops||[]).some(stp=> stp.reason==='休憩' && stp.to && new Date(stp.from).getTime()>=bw.bs && new Date(stp.from).getTime()<bw.be && new Date(stp.to).getTime()<=t);
+        if(!resumed) s='break';
+      } else {
+        s='break';
       }
     }
     states[i]=s;
@@ -1700,9 +1718,18 @@ function summaryFor(machineId, dayDate){
     if(r.machineId!==machineId) return;
     const endT=endRefT(r);
     (r.stops||[]).forEach(s=>{
+      if(s.reason==='休憩') return;   // 休憩は別集計（breakMin）
       const sf=new Date(s.from).getTime();
       const stt=s.to?new Date(s.to).getTime():endT;
-      const m=clipMin(sf,stt,wsT,weEff);
+      let m=clipMin(sf,stt,wsT,weEff);
+      if(m<=0) return;
+      // 休憩と被る分は差し引く（休憩を優先し二重計上を防ぐ）
+      BREAKS.forEach(b=>{
+        const bs=new Date(dayDate); bs.setHours(b.sh,b.sm,0,0);
+        const be=new Date(dayDate); be.setHours(b.eh,b.em,0,0);
+        m -= clipMin(sf,stt, Math.max(bs.getTime(),wsT), Math.min(be.getTime(),weEff));
+      });
+      m=Math.max(0,m);
       if(m>0){ loggedStopMin+=m; reasons[s.reason]=(reasons[s.reason]||0)+m; }
     });
     (r.dailyCounts||[]).forEach(d=>{ if(d.date===dayKey){ qty+=(d.qty||0); finishedCount++; } });
@@ -1967,7 +1994,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-26.6';
+const APP_VERSION = '2026-06-26.7';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
