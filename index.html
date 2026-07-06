@@ -1659,6 +1659,7 @@ function machineDayStates(machineId, dayDate){
   for(let i=0;i<total;i++){
     const t=wsT+i*60000;
     if(t>=now){ states[i]='remain'; continue; }        // 当日まだ来ていない
+    if(inBreak(dayDate,t)){ states[i]='break'; continue; }   // 休憩は常に休憩（強制停止・稼働から除外）
     let s='stop';
     for(const r of recs){
       const rs=new Date(r.startTime).getTime();
@@ -1674,7 +1675,6 @@ function machineDayStates(machineId, dayDate){
         break;
       }
     }
-    if(inBreak(dayDate,t) && s!=='run') s='break';   // 休憩中は（動かしていなければ）休憩扱い（別色）
     states[i]=s;
   }
   return { states, total, wsT };
@@ -1967,7 +1967,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-26.5';
+const APP_VERSION = '2026-06-26.6';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
