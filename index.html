@@ -326,15 +326,17 @@
   .sum-legend i.stop{background:var(--pause);}
   .sum-legend i.break{background:#4a6fd0;}
   .sum-scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--ink3);margin-top:3px;padding:0 1px;}
-  .sum-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:13px;}
+  .sum-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:13px;}
   .ss{background:var(--surface2);border-radius:10px;padding:9px 8px;text-align:center;}
   .ss .lab{font-size:10px;color:var(--ink3);font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;}
   .ss .lab .dot{width:8px;height:8px;border-radius:2px;}
   .ss .lab .dot.run{background:var(--run);}
   .ss .lab .dot.stop{background:var(--pause);}
+  .ss .lab .dot.break{background:#4a6fd0;}
   .ss .val{font-family:var(--mono);font-weight:700;font-size:15px;color:var(--ink);margin-top:3px;line-height:1.2;}
   .ss .val.run{color:var(--run-d);}
   .ss .val.stop{color:var(--pause-d);}
+  .ss .val.break{color:#3a56a5;}
   .ss .val.qty{color:var(--orange-d);}
   .sum-reasons{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line);font-size:11px;color:var(--ink2);line-height:1.8;}
   .sum-reasons .rh{font-size:10px;color:var(--ink3);font-weight:700;margin-right:4px;}
@@ -1704,9 +1706,10 @@ function summaryFor(machineId, dayDate){
   let runMin=0, breakMin=0, remainCount=0;
   states.forEach(s=>{ if(s==='run') runMin++; else if(s==='break') breakMin++; else if(s==='remain') remainCount++; });
   const elapsed = total - remainCount;
-  const notRun = Math.max(0, elapsed - runMin);
+  const stopMin = Math.max(0, elapsed - runMin - breakMin);   // 止まっている（休憩を除く）
+  const workWindow = Math.max(0, elapsed - breakMin);          // 実働可能時間（定時−休憩）
   const remain = remainCount;
-  const rate = elapsed>0 ? Math.round(runMin/elapsed*100) : null;
+  const rate = workWindow>0 ? Math.round(runMin/workWindow*100) : null;
 
   // 停止理由の内訳・生産個数
   const ws=new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT=ws.getTime();
@@ -1734,9 +1737,7 @@ function summaryFor(machineId, dayDate){
     });
     (r.dailyCounts||[]).forEach(d=>{ if(d.date===dayKey){ qty+=(d.qty||0); finishedCount++; } });
   });
-  // 休憩を内訳に表示（稼働した機械のみ。休憩中に動かした時間は稼働として計上され休憩から外れる）
-  if(runMin>0 && breakMin>0) reasons['休憩'] = breakMin;
-  return { runMin, notRun, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, qty, finishedCount, rate, reasons };
+  return { runMin, notRun: stopMin, breakMin, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, workWindow, qty, finishedCount, rate, reasons };
 }
 
 // 実時刻ベースの帯グラフ用タイムライン（machineDayStates を run/stop/remain の帯に集約）
@@ -1757,12 +1758,12 @@ function renderSummary(){
   $('#sumDateLabel').textContent = fmtDate(d) + (isToday ? '（今日）' : '');
 
   // day totals
-  let totalQty = 0, totalRun = 0, totalElapsed = 0;
+  let totalQty = 0, totalRun = 0, totalWork = 0;
   store.machines.forEach(m=>{
     const s = summaryFor(m.id, d);
-    totalQty += s.qty; totalRun += s.runMin; totalElapsed += s.elapsed;
+    totalQty += s.qty; totalRun += s.runMin; totalWork += s.workWindow;
   });
-  const avgRate = totalElapsed > 0 ? Math.round(totalRun/totalElapsed*100) : null;
+  const avgRate = totalWork > 0 ? Math.round(totalRun/totalWork*100) : null;
   $('#sumDayMeta').innerHTML = `
     <div class="dm"><div class="lab">合計生産個数</div><div class="val">${totalQty.toLocaleString()}<small> 個</small></div></div>
     <div class="dm"><div class="lab">平均稼働率（9〜17時）</div><div class="val">${avgRate==null?'—':avgRate+'<small> %</small>'}</div></div>`;
@@ -1799,6 +1800,7 @@ function renderSummary(){
       <div class="sum-stats">
         <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
         <div class="ss"><div class="lab"><span class="dot stop"></span>止まっている</div><div class="val stop">${durLabel(s.notRun)}</div></div>
+        <div class="ss"><div class="lab"><span class="dot break"></span>休憩</div><div class="val break">${durLabel(s.breakMin)}</div></div>
         <div class="ss"><div class="lab">生産個数</div><div class="val qty">${s.qty.toLocaleString()}個</div></div>
       </div>
       ${reasonsHtml}
@@ -1994,7 +1996,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-26.7';
+const APP_VERSION = '2026-06-26.8';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
