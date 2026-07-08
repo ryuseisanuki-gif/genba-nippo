@@ -338,6 +338,7 @@
   .ss .val.stop{color:var(--pause-d);}
   .ss .val.break{color:#3a56a5;}
   .ss .val.qty{color:var(--orange-d);}
+  .ss .qty-sub{font-size:10px;color:var(--ink3);font-weight:600;margin-top:2px;}
   .sum-reasons{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line);font-size:11px;color:var(--ink2);line-height:1.8;}
   .sum-reasons .rh{font-size:10px;color:var(--ink3);font-weight:700;margin-right:4px;}
   .sum-reasons .rr{display:inline-block;background:var(--pause-bg);color:var(--pause-d);border-radius:12px;padding:2px 9px;margin:2px 4px 2px 0;font-weight:600;}
@@ -1716,7 +1717,7 @@ function summaryFor(machineId, dayDate){
   const weFull=new Date(dayDate); weFull.setHours(STD_END_H,0,0,0);
   const now=Date.now(); const weEff=Math.min(weFull.getTime(), now);
   const dayKey=dateKey(new Date(dayDate));
-  let loggedStopMin=0, qty=0, finishedCount=0; const reasons={};
+  let loggedStopMin=0, qty=0, cumQty=0, finishedCount=0; const reasons={};
   store.records.forEach(r=>{
     if(r.machineId!==machineId) return;
     const endT=endRefT(r);
@@ -1735,9 +1736,14 @@ function summaryFor(machineId, dayDate){
       m=Math.max(0,m);
       if(m>0){ loggedStopMin+=m; reasons[s.reason]=(reasons[s.reason]||0)+m; }
     });
-    (r.dailyCounts||[]).forEach(d=>{ if(d.date===dayKey){ qty+=(d.qty||0); finishedCount++; } });
+    const dcToday = (r.dailyCounts||[]).filter(d=>d.date===dayKey);
+    if(dcToday.length){
+      dcToday.forEach(d=>{ qty+=(d.qty||0); finishedCount++; });
+      // その作業の累計（この日までに入力された個数の通算＝作業終了までの合計に育つ）
+      cumQty += (r.dailyCounts||[]).reduce((sm,d)=> (d.date<=dayKey ? sm+(d.qty||0) : sm), 0);
+    }
   });
-  return { runMin, notRun: stopMin, breakMin, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, workWindow, qty, finishedCount, rate, reasons };
+  return { runMin, notRun: stopMin, breakMin, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, workWindow, qty, cumQty, finishedCount, rate, reasons };
 }
 
 // 実時刻ベースの帯グラフ用タイムライン（machineDayStates を run/stop/remain の帯に集約）
@@ -1765,7 +1771,7 @@ function renderSummary(){
   });
   const avgRate = totalWork > 0 ? Math.round(totalRun/totalWork*100) : null;
   $('#sumDayMeta').innerHTML = `
-    <div class="dm"><div class="lab">合計生産個数</div><div class="val">${totalQty.toLocaleString()}<small> 個</small></div></div>
+    <div class="dm"><div class="lab">本日の生産個数</div><div class="val">${totalQty.toLocaleString()}<small> 個</small></div></div>
     <div class="dm"><div class="lab">平均稼働率（9〜17時）</div><div class="val">${avgRate==null?'—':avgRate+'<small> %</small>'}</div></div>`;
 
   const list = $('#summaryList');
@@ -1801,7 +1807,7 @@ function renderSummary(){
         <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
         <div class="ss"><div class="lab"><span class="dot stop"></span>止まっている</div><div class="val stop">${durLabel(s.notRun)}</div></div>
         <div class="ss"><div class="lab"><span class="dot break"></span>休憩</div><div class="val break">${durLabel(s.breakMin)}</div></div>
-        <div class="ss"><div class="lab">生産個数</div><div class="val qty">${s.qty.toLocaleString()}個</div></div>
+        <div class="ss"><div class="lab">生産個数（本日）</div><div class="val qty">${s.qty.toLocaleString()}個</div>${s.cumQty>s.qty?`<div class="qty-sub">累計 ${s.cumQty.toLocaleString()}個</div>`:''}</div>
       </div>
       ${reasonsHtml}
       <div class="sum-jobs">記録 ${s.finishedCount}件${s.remain>0 && s.elapsed>0?' ・ 残り定時 '+durLabel(s.remain):''}</div>
@@ -1996,7 +2002,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-26.8';
+const APP_VERSION = '2026-06-26.9';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
