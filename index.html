@@ -339,6 +339,13 @@
   .ss .val.break{color:#3a56a5;}
   .ss .val.qty{color:var(--orange-d);}
   .ss .qty-sub{font-size:10px;color:var(--ink3);font-weight:600;margin-top:2px;}
+  .add-stop-btn{width:100%;margin-top:10px;padding:9px;border:1px dashed var(--line);border-radius:10px;background:var(--surface2);color:var(--ink2);font-weight:700;font-size:12.5px;}
+  .add-stop-btn:active{background:var(--steel);}
+  .add-stop-mc{font-size:13px;color:var(--ink2);margin:-4px 0 10px;font-weight:700;}
+  .time-row{display:flex;gap:12px;margin:12px 0 4px;}
+  .time-row label{flex:1;font-size:11px;color:var(--ink3);font-weight:700;display:flex;flex-direction:column;gap:5px;}
+  .time-row input[type=time]{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:11px;font-size:16px;font-family:var(--mono);color:var(--ink);}
+  .add-stop-note{font-size:12px;color:var(--pause-d);font-weight:700;min-height:16px;margin:2px 0 4px;}
   .sum-reasons{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line);font-size:11px;color:var(--ink2);line-height:1.8;}
   .sum-reasons .rh{font-size:10px;color:var(--ink3);font-weight:700;margin-right:4px;}
   .sum-reasons .rr{display:inline-block;background:var(--pause-bg);color:var(--pause-d);border-radius:12px;padding:2px 9px;margin:2px 4px 2px 0;font-weight:600;}
@@ -674,6 +681,32 @@
   </div>
 </div>
 
+<div class="ov" id="addStopSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>停止を後から追加</h3>
+    <p class="add-stop-mc" id="addStopMachine"></p>
+    <div class="chip-grid" id="addStopChips">
+      <button class="chip" onclick="selAddStopChip(this)">コイル交換</button>
+      <button class="chip" onclick="selAddStopChip(this)">材料切れ</button>
+      <button class="chip" onclick="selAddStopChip(this)">金型不具合</button>
+      <button class="chip" onclick="selAddStopChip(this)">設備故障</button>
+      <button class="chip" onclick="selAddStopChip(this)">品質不良</button>
+      <button class="chip" onclick="selAddStopChip(this)">段取り替え</button>
+      <button class="chip" onclick="selAddStopChip(this)">作業者不在</button>
+      <button class="chip" onclick="selAddStopChip(this)">その他</button>
+    </div>
+    <div class="time-row">
+      <label>開始<input type="time" id="addStopFrom" oninput="addStopCalc()"></label>
+      <label>終了<input type="time" id="addStopTo" oninput="addStopCalc()"></label>
+    </div>
+    <div class="add-stop-note" id="addStopCalc"></div>
+    <div class="sheet-actions">
+      <button class="b-cancel" onclick="closeAddStop()">キャンセル</button>
+      <button class="b-ok warn" onclick="confirmAddStop()">停止を追加</button>
+    </div>
+  </div>
+</div>
 <div id="updateBar" class="hidden">
   <span>新しいバージョンがあります</span>
   <button class="u-go" onclick="applyUpdate()">今すぐ更新</button>
@@ -1811,8 +1844,50 @@ function renderSummary(){
       </div>
       ${reasonsHtml}
       <div class="sum-jobs">記録 ${s.finishedCount}件${s.remain>0 && s.elapsed>0?' ・ 残り定時 '+durLabel(s.remain):''}</div>
+      <button class="add-stop-btn" onclick="openAddStop('${esc(m.id)}')">＋ 停止を後から追加（押し忘れ）</button>
     </div>`;
   }).join('');
+}
+
+/* ===== 停止を後から追加（押し忘れ対応） ===== */
+let addStopMachineId = null, addStopDate = null;
+function openAddStop(machineId){
+  addStopMachineId = machineId;
+  addStopDate = new Date(summaryDate);
+  $('#addStopMachine').textContent = machineId + ' ／ ' + fmtDate(summaryDate);
+  document.querySelectorAll('#addStopChips .chip').forEach(c=>c.classList.remove('sel'));
+  const coil = [...document.querySelectorAll('#addStopChips .chip')].find(c=>c.textContent==='コイル交換');
+  if(coil) coil.classList.add('sel');
+  $('#addStopFrom').value=''; $('#addStopTo').value=''; $('#addStopCalc').textContent='';
+  $('#addStopSheet').classList.add('active');
+}
+function closeAddStop(){ $('#addStopSheet').classList.remove('active'); }
+function selAddStopChip(el){ document.querySelectorAll('#addStopChips .chip').forEach(c=>c.classList.remove('sel')); el.classList.add('sel'); }
+function addStopCalc(){
+  const f=$('#addStopFrom').value, t=$('#addStopTo').value;
+  if(!f||!t){ $('#addStopCalc').textContent=''; return; }
+  const [fh,fm]=f.split(':').map(Number), [th,tm]=t.split(':').map(Number);
+  const min=(th*60+tm)-(fh*60+fm);
+  $('#addStopCalc').textContent = min>0 ? (min+'分間の停止として追加します') : '終了は開始より後にしてください';
+}
+function confirmAddStop(){
+  const chip=document.querySelector('#addStopChips .chip.sel');
+  if(!chip){ toast('理由を選んでください','error'); return; }
+  const f=$('#addStopFrom').value, t=$('#addStopTo').value;
+  if(!f||!t){ toast('開始・終了時刻を入力してください','error'); return; }
+  const [fh,fm]=f.split(':').map(Number), [th,tm]=t.split(':').map(Number);
+  const from=new Date(addStopDate); from.setHours(fh,fm,0,0);
+  const to=new Date(addStopDate); to.setHours(th,tm,0,0);
+  if(to.getTime()<=from.getTime()){ toast('終了は開始より後にしてください','error'); return; }
+  // その時間帯に稼働していた作業記録を探す
+  const rec = store.records.find(r=> r.machineId===addStopMachineId && new Date(r.startTime).getTime()<=from.getTime() && endRefT(r)>=to.getTime());
+  if(!rec){ toast('その時間帯に作業記録がありません','error'); return; }
+  rec.stops = rec.stops || [];
+  rec.stops.push({ reason: chip.textContent, detail:'後から追加', from: from.toISOString(), to: to.toISOString() });
+  save();
+  closeAddStop();
+  toast('停止を追加しました','success');
+  renderSummary(); renderMachineGrid(); renderStatus();
 }
 
 /* ===== EXPORT / IMPORT ===== */
@@ -2002,7 +2077,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-26.9';
+const APP_VERSION = '2026-06-27.1';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
