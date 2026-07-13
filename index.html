@@ -343,6 +343,9 @@
   .ss .val.break{color:#3a56a5;}
   .ss .val.qty{color:var(--orange-d);}
   .ss .qty-sub{font-size:10px;color:var(--ink3);font-weight:600;margin-top:2px;}
+  .ss .ach{font-weight:800;font-size:11px;}
+  .ss .ach.ok{color:var(--run-d);}
+  .ss .ach.low{color:var(--pause-d);}
   .add-stop-btn{width:100%;margin-top:10px;padding:9px;border:1px dashed var(--line);border-radius:10px;background:var(--surface2);color:var(--ink2);font-weight:700;font-size:12.5px;}
   .add-stop-btn:active{background:var(--steel);}
   .add-stop-mc{font-size:13px;color:var(--ink2);margin:-4px 0 10px;font-weight:700;}
@@ -1859,7 +1862,7 @@ function renderSummary(){
         <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
         <div class="ss"><div class="lab"><span class="dot stop"></span>止まっている</div><div class="val stop">${durLabel(s.notRun)}</div></div>
         <div class="ss"><div class="lab"><span class="dot break"></span>休憩</div><div class="val break">${durLabel(s.breakMin)}</div></div>
-        <div class="ss"><div class="lab">生産個数（本日）</div><div class="val qty">${s.qty.toLocaleString()}個</div>${s.cumQty>s.qty?`<div class="qty-sub">累計 ${s.cumQty.toLocaleString()}個</div>`:''}${s.target!=null?`<div class="qty-sub">目標 ${s.target.toLocaleString()}個${s.target>0?'・達成'+Math.round(s.qty/s.target*100)+'%':''}</div>`:''}</div>
+        <div class="ss"><div class="lab">生産個数（本日）</div><div class="val qty">${s.qty.toLocaleString()}個</div>${s.cumQty>s.qty?`<div class="qty-sub">累計 ${s.cumQty.toLocaleString()}個</div>`:''}${s.target!=null?`<div class="qty-sub">目標 ${s.target.toLocaleString()}個${s.target>0?` <span class="ach ${s.qty>=s.target?'ok':'low'}">達成 ${Math.round(s.qty/s.target*100)}%</span>`:''}</div>`:''}</div>
       </div>
       ${reasonsHtml}
       <div class="sum-jobs">記録 ${s.finishedCount}件${s.remain>0 && s.elapsed>0?' ・ 残り定時 '+durLabel(s.remain):''}</div>
@@ -2106,7 +2109,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-27.2';
+const APP_VERSION = '2026-06-27.3';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
