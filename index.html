@@ -329,6 +329,8 @@
   .sum-legend i.run{background:var(--run);}
   .sum-legend i.stop{background:var(--pause);}
   .sum-legend i.break{background:#4a6fd0;}
+  .sum-bar .seg.addstop{background:repeating-linear-gradient(45deg,#b5790a,#b5790a 3px,#e6ad46 3px,#e6ad46 6px);}
+  .sum-legend i.addstop{background:repeating-linear-gradient(45deg,#b5790a,#b5790a 3px,#e6ad46 3px,#e6ad46 6px);}
   .sum-scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--ink3);margin-top:3px;padding:0 1px;}
   .sum-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:13px;}
   .ss{background:var(--surface2);border-radius:10px;padding:9px 8px;text-align:center;}
@@ -1723,13 +1725,13 @@ function machineDayStates(machineId, dayDate){
       const re=endRefT(r);
       if(t>=rs && t<re){
         activeRec=r;
-        let stopped=false;
+        let coveringStop=null;
         (r.stops||[]).forEach(stp=>{
           const sf=new Date(stp.from).getTime();
           const stt=stp.to?new Date(stp.to).getTime():re;
-          if(t>=sf && t<stt) stopped=true;
+          if(t>=sf && t<stt) coveringStop=stp;
         });
-        s=stopped?'stop':'run';
+        s = coveringStop ? (coveringStop.detail==='後から追加' ? 'addstop' : 'stop') : 'run';
         break;
       }
     }
@@ -1857,7 +1859,7 @@ function renderSummary(){
         ${summaryTimeline(m.id, d).map(seg=>`<div class="seg ${seg.state}" style="width:${seg.pct}%"></div>`).join('')}
       </div>
       <div class="sum-scale"><span>9:00</span><span>13:00</span><span>17:00</span></div>
-      <div class="sum-legend"><span><i class="run"></i>動いている</span><span><i class="stop"></i>止まっている</span><span><i class="break"></i>休憩</span></div>
+      <div class="sum-legend"><span><i class="run"></i>動いている</span><span><i class="stop"></i>止まっている</span><span><i class="break"></i>休憩</span><span><i class="addstop"></i>後から追加</span></div>
       <div class="sum-stats">
         <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
         <div class="ss"><div class="lab"><span class="dot stop"></span>止まっている</div><div class="val stop">${durLabel(s.notRun)}</div></div>
@@ -2109,7 +2111,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-27.3';
+const APP_VERSION = '2026-06-27.4';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
