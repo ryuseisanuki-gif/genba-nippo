@@ -358,6 +358,7 @@
   .sum-reasons{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line);font-size:11px;color:var(--ink2);line-height:1.8;}
   .sum-reasons .rh{font-size:10px;color:var(--ink3);font-weight:700;margin-right:4px;}
   .sum-reasons .rr{display:inline-block;background:var(--pause-bg);color:var(--pause-d);border-radius:12px;padding:2px 9px;margin:2px 4px 2px 0;font-weight:600;}
+  .sum-reasons .rr.added{border:1px dashed var(--pause-d);background:repeating-linear-gradient(45deg,#f6e6c4,#f6e6c4 4px,#fdf3df 4px,#fdf3df 6px);}
   .sum-jobs{font-size:11px;color:var(--ink3);margin-top:9px;}
 
   /* ── Settings ── */
@@ -1783,7 +1784,7 @@ function summaryFor(machineId, dayDate){
         m -= clipMin(sf,stt, Math.max(bs.getTime(),wsT), Math.min(be.getTime(),weEff));
       });
       m=Math.max(0,m);
-      if(m>0){ loggedStopMin+=m; reasons[s.reason]=(reasons[s.reason]||0)+m; }
+      if(m>0){ loggedStopMin+=m; const rk = s.detail==='後から追加' ? (s.reason+'（後から追加）') : s.reason; reasons[rk]=(reasons[rk]||0)+m; }
     });
     const dcToday = (r.dailyCounts||[]).filter(d=>d.date===dayKey);
     if(dcToday.length){
@@ -1846,7 +1847,7 @@ function renderSummary(){
     const reasonKeys = Object.keys(s.reasons);
     const reasonsHtml = reasonKeys.length ? `
       <div class="sum-reasons"><span class="rh">記録された停止</span>${
-        reasonKeys.map(k=>`<span class="rr">${esc(k)} ${durLabel(Math.round(s.reasons[k]))}</span>`).join('')
+        reasonKeys.map(k=>`<span class="rr${k.indexOf('後から追加')>=0?' added':''}">${esc(k)} ${durLabel(Math.round(s.reasons[k]))}</span>`).join('')
       }</div>` : '';
     return `
     <div class="sum-card">
@@ -2111,7 +2112,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-27.4';
+const APP_VERSION = '2026-06-27.5';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
