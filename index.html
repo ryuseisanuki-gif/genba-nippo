@@ -355,6 +355,14 @@
   .time-row label{flex:1;font-size:11px;color:var(--ink3);font-weight:700;display:flex;flex-direction:column;gap:5px;}
   .time-row input[type=time]{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:11px;font-size:16px;font-family:var(--mono);color:var(--ink);}
   .add-stop-note{font-size:12px;color:var(--pause-d);font-weight:700;min-height:16px;margin:2px 0 4px;}
+  .aset{border-top:1px dashed var(--line);padding:10px 0 4px;}
+  .aset:first-child{border-top:none;padding-top:2px;}
+  .aset-top{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink);font-weight:600;}
+  .aset-fields{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
+  .aset-fields label{flex:1;min-width:88px;font-size:10px;color:var(--ink3);font-weight:700;display:flex;flex-direction:column;gap:4px;}
+  .aset-fields input{background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;font-family:var(--mono);color:var(--ink);}
+  .qty-edit{width:100%;box-sizing:border-box;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-top:2px;font-family:var(--mono);font-size:16px;font-weight:700;color:var(--orange-d);text-align:center;}
+  .qty-edit:focus{outline:none;border-color:var(--orange);}
   .sum-reasons{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line);font-size:11px;color:var(--ink2);line-height:1.8;}
   .sum-reasons .rh{font-size:10px;color:var(--ink3);font-weight:700;margin-right:4px;}
   .sum-reasons .rr{display:inline-block;background:var(--pause-bg);color:var(--pause-d);border-radius:12px;padding:2px 9px;margin:2px 4px 2px 0;font-weight:600;}
@@ -594,6 +602,12 @@
       <button class="btn-add" onclick="addCoil()">追加</button>
     </div>
     <div class="set-note">入力画面でコイルを選べます。停止理由「コイル交換」で在庫が1減ります。</div>
+  </div>
+
+  <div class="card set-card">
+    <h3>🤖 自動記録（毎日 9:00開始・17:00終了）</h3>
+    <div id="autoSettingsList"></div>
+    <div class="set-note">オンにした機械は毎日 9:00 に自動で作業開始し、17:00 に自動終了します（1日1記録）。休憩は自動で停止。<b>コイル交換などの停止と生産個数は手動</b>で入力してください（個数は「記録」タブで入力できます）。</div>
   </div>
 
   <div class="card set-card">
@@ -1244,6 +1258,7 @@ function processDayBoundaries(){
   let changed = false;
   // (1) Past 17:00 → running/stopped jobs become overnight (await today's count)
   store.records.forEach(r=>{
+    if(r.auto) return;   // 自動記録は processAutoDaily が管理（持ち越しにしない）
     if(r.status==='running' || r.status==='stopped'){
       const cut = cutoffT(r);
       if(now >= cut){
@@ -1269,6 +1284,51 @@ function processDayBoundaries(){
         delete r.overnightDate;
         changed = true;
       }
+    }
+  });
+  if(changed) save();
+  return changed;
+}
+/* ===== 自動記録（毎日 9:00開始 / 17:00終了・1日1記録） ===== */
+function newAutoRecord(m, a, startDate, endDate){
+  return {
+    id: uid(), machineId: m.id, auto: true,
+    partNo: a.partNo||'', partName:'', rawScan: a.partNo||'',
+    indicatedQty:'', due:'',
+    startTime: startDate.toISOString(), sessionStart: startDate.toISOString(),
+    endTime: endDate ? endDate.toISOString() : null,
+    lastRunEnd: null, qty: null,
+    stops: [], dailyCounts: [], note: '',
+    coilId: null, spm: a.spm||null, spp: a.spp||null,
+    status: endDate ? 'done' : 'running'
+  };
+}
+function processAutoDaily(){
+  const now = Date.now();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const nine = new Date(today); nine.setHours(STD_START_H,0,0,0);
+  const seventeen = new Date(today); seventeen.setHours(STD_END_H,0,0,0);
+  const dk = dateKey(today);
+  let changed = false;
+  store.machines.forEach(m=>{
+    const a = m.auto;
+    if(!a || !a.on) return;
+    const todays = store.records.filter(r=> r.machineId===m.id && r.auto===true && dateKey(new Date(r.startTime))===dk);
+    if(now >= seventeen.getTime()){
+      // 17:00以降：今日の自動記録を終了（個数は後から手入力）
+      todays.forEach(r=>{
+        if(r.status==='running' || r.status==='stopped'){
+          const os = openStop(r); if(os) os.to = seventeen.toISOString();
+          r.endTime = seventeen.toISOString();
+          r.status = 'done';
+          changed = true;
+        }
+      });
+      // 今日ぶんが未作成（日中アプリ未起動）→ 9:00-17:00の記録を作って完了にする
+      if(todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, seventeen)); changed = true; }
+    } else if(now >= nine.getTime()){
+      // 9:00〜17:00：今日ぶんが無ければ自動開始
+      if(todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, null)); changed = true; }
     }
   });
   if(changed) save();
@@ -1387,7 +1447,8 @@ function processBreaks(){
 function tickBoundaries(){
   const changed = processDayBoundaries();
   const brk = processBreaks();
-  if(changed || brk){ refreshActiveViews(); notifyPendingCarry(); }
+  const auto = processAutoDaily();
+  if(changed || brk || auto){ refreshActiveViews(); notifyPendingCarry(); }
 }
 
 function openEndSheet(){
@@ -1664,7 +1725,7 @@ function recCard(r){
       <div class="rec-cell"><div class="lab">開始</div><div class="val">${fmtDT(r.startTime)}</div></div>
       <div class="rec-cell"><div class="lab">終了</div><div class="val">${r.status==='done'?fmtDT(r.endTime):'—'}</div></div>
       <div class="rec-cell"><div class="lab">${r.status==='done'?'実働日数':'経過'}</div><div class="val">${r.status==='done'? (dc.length+'日') : durLabel(dur)+'〜'}</div></div>
-      <div class="rec-cell"><div class="lab">${dc.length>1?'合計個数':'個数'}</div><div class="val qty">${showQty?total.toLocaleString():'—'}</div></div>
+      <div class="rec-cell"><div class="lab">${dc.length>1?'合計個数':'個数'}</div>${(r.status==='done' && dc.length<=1)?`<input type="number" class="qty-edit" inputmode="numeric" value="${showQty?total:''}" placeholder="個数を入力" onchange="setRecordQty('${r.id}', this.value)">`:`<div class="val qty">${showQty?total.toLocaleString():'—'}</div>`}</div>
       ${stMin>0?`<div class="rec-cell"><div class="lab">停止合計</div><div class="val stopval">${durLabel(stMin)}</div></div>
       <div class="rec-cell"><div class="lab">正味稼働</div><div class="val">${durLabel(netWorkMin(r))}${active?'〜':''}</div></div>`:''}
     </div>
@@ -2052,6 +2113,42 @@ function renderCoilSettings(){
       <button class="x" onclick="deleteCoil('${esc(c.id)}')">✕</button>
     </div>`).join('');
 }
+function renderAutoSettings(){
+  const el=$('#autoSettingsList'); if(!el) return;
+  if(!store.machines.length){ el.innerHTML='<div class="set-note">機械が未登録です。</div>'; return; }
+  el.innerHTML = store.machines.map(m=>{
+    const a = m.auto||{};
+    return `<div class="aset">
+      <label class="aset-top"><input type="checkbox" ${a.on?'checked':''} onchange="setAuto('${esc(m.id)}','on',this.checked)"><b>${esc(m.id)}</b> を自動記録する</label>
+      <div class="aset-fields">
+        <label>品番<input type="text" value="${esc(a.partNo||'')}" onchange="setAuto('${esc(m.id)}','partNo',this.value)"></label>
+        <label>回転数/分<input type="number" inputmode="numeric" value="${a.spm||''}" onchange="setAuto('${esc(m.id)}','spm',this.value)"></label>
+        <label>何回転で1個<input type="number" inputmode="numeric" value="${a.spp||''}" onchange="setAuto('${esc(m.id)}','spp',this.value)"></label>
+      </div>
+    </div>`;
+  }).join('');
+}
+function setAuto(id, key, val){
+  const m = store.machines.find(x=>x.id===id); if(!m) return;
+  m.auto = m.auto || {};
+  if(key==='on') m.auto.on = !!val;
+  else if(key==='partNo') m.auto.partNo = String(val||'').trim();
+  else m.auto[key] = parseInt(val)||null;
+  save(); renderAutoSettings();
+  if(key==='on' && val) processAutoDaily();
+  refreshActiveViews();
+}
+function setRecordQty(id, val){
+  const r = store.records.find(x=>x.id===id); if(!r) return;
+  const n = parseInt(val); const q = isNaN(n)?0:n;
+  const dk = dateKey(new Date(r.startTime));
+  r.dailyCounts = r.dailyCounts || [];
+  const i = r.dailyCounts.findIndex(d=>d.date===dk);
+  if(i>=0) r.dailyCounts[i].qty = q; else r.dailyCounts.push({ date:dk, qty:q, at:new Date().toISOString() });
+  r.qty = recordTotalQty(r);
+  save(); renderRecords(); renderSummary();
+  toast('個数を記録しました','success');
+}
 function addCoil(){
   const name = $('#newCoilName').value.trim();
   const n = parseInt($('#newCoilStock').value);
@@ -2112,7 +2209,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-27.5';
+const APP_VERSION = '2026-06-28.1';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
@@ -2136,12 +2233,14 @@ function init(){
   load();
   processDayBoundaries();          // catch up any 17:00 / 9:00 boundaries since last open
   processBreaks();                 // 休憩(12:00-12:45 / 15:00-15:15)の自動停止/再開をキャッチアップ
+  processAutoDaily();              // 自動記録（9:00開始/17:00終了）をキャッチアップ
   setupOverlayDismiss();
   renderMachineGrid();
   renderScanned();
   renderStatus();
   renderMachineSettings();
   renderCoilSettings();
+  renderAutoSettings();
   renderCoilSelect();
   renderRpm();
   clockTick();
