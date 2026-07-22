@@ -363,6 +363,7 @@
   .aset-fields input{background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;font-family:var(--mono);color:var(--ink);}
   .qty-edit{width:100%;box-sizing:border-box;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-top:2px;font-family:var(--mono);font-size:16px;font-weight:700;color:var(--orange-d);text-align:center;}
   .qty-edit:focus{outline:none;border-color:var(--orange);}
+  .qty-edit.missing{border:1.5px dashed var(--orange);background:#fff7ee;}
   .sum-reasons{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line);font-size:11px;color:var(--ink2);line-height:1.8;}
   .sum-reasons .rh{font-size:10px;color:var(--ink3);font-weight:700;margin-right:4px;}
   .sum-reasons .rr{display:inline-block;background:var(--pause-bg);color:var(--pause-d);border-radius:12px;padding:2px 9px;margin:2px 4px 2px 0;font-weight:600;}
@@ -1313,6 +1314,19 @@ function processAutoDaily(){
   store.machines.forEach(m=>{
     const a = m.auto;
     if(!a || !a.on) return;
+    // 前日以前の自動記録が開いたままなら、その日の17:00で締める（個数未入力でも翌日は自動開始できるように）
+    store.records.forEach(r=>{
+      if(r.machineId!==m.id || r.auto!==true) return;
+      if(r.status!=='running' && r.status!=='stopped') return;
+      const rd = new Date(r.startTime); rd.setHours(0,0,0,0);
+      if(rd.getTime() < today.getTime()){
+        const end = new Date(rd); end.setHours(STD_END_H,0,0,0);
+        const os = openStop(r); if(os) os.to = end.toISOString();
+        r.endTime = end.toISOString();
+        r.status = 'done';
+        changed = true;
+      }
+    });
     const todays = store.records.filter(r=> r.machineId===m.id && r.auto===true && dateKey(new Date(r.startTime))===dk);
     if(now >= seventeen.getTime()){
       // 17:00以降：今日の自動記録を終了（個数は後から手入力）
@@ -1725,7 +1739,7 @@ function recCard(r){
       <div class="rec-cell"><div class="lab">開始</div><div class="val">${fmtDT(r.startTime)}</div></div>
       <div class="rec-cell"><div class="lab">終了</div><div class="val">${r.status==='done'?fmtDT(r.endTime):'—'}</div></div>
       <div class="rec-cell"><div class="lab">${r.status==='done'?'実働日数':'経過'}</div><div class="val">${r.status==='done'? (dc.length+'日') : durLabel(dur)+'〜'}</div></div>
-      <div class="rec-cell"><div class="lab">${dc.length>1?'合計個数':'個数'}</div>${(r.status==='done' && dc.length<=1)?`<input type="number" class="qty-edit" inputmode="numeric" value="${showQty?total:''}" placeholder="個数を入力" onchange="setRecordQty('${r.id}', this.value)">`:`<div class="val qty">${showQty?total.toLocaleString():'—'}</div>`}</div>
+      <div class="rec-cell"><div class="lab">${dc.length>1?'合計個数':'個数'}</div>${(r.status==='done' && dc.length<=1)?`<input type="number" class="qty-edit${showQty?'':' missing'}" inputmode="numeric" value="${showQty?total:''}" placeholder="個数を入力" onchange="setRecordQty('${r.id}', this.value)">`:`<div class="val qty">${showQty?total.toLocaleString():'—'}</div>`}</div>
       ${stMin>0?`<div class="rec-cell"><div class="lab">停止合計</div><div class="val stopval">${durLabel(stMin)}</div></div>
       <div class="rec-cell"><div class="lab">正味稼働</div><div class="val">${durLabel(netWorkMin(r))}${active?'〜':''}</div></div>`:''}
     </div>
@@ -2209,7 +2223,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.1';
+const APP_VERSION = '2026-06-28.2';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
