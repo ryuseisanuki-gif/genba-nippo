@@ -566,8 +566,8 @@
   <div class="rec-bar">
     <select class="rec-filter" id="recFilter" onchange="renderRecords()"></select>
     <select class="rec-filter" id="recSort" onchange="renderRecords()">
-      <option value="machine">機械別</option>
-      <option value="date">日付順</option>
+      <option value="machine">機械ごと（日付順）</option>
+      <option value="date">日付順（全機械）</option>
     </select>
     <button class="btn-out" onclick="exportCSV()">⬇ CSV</button>
     <button class="btn-out" onclick="exportJSON()">⬇ バックアップ</button>
@@ -2236,7 +2236,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.3';
+const APP_VERSION = '2026-06-28.4';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
