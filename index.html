@@ -272,6 +272,7 @@
   .rec-cell .lab{font-size:10px;color:var(--ink3);font-weight:600;}
   .rec-cell .val{font-size:14px;font-weight:700;color:var(--ink);font-family:var(--mono);}
   .rec-cell .val.qty{color:var(--orange-d);font-size:17px;}
+  .rec-mid{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:700;color:#fff;background:var(--ink);border-radius:6px;padding:1px 7px;margin-bottom:3px;}
   .rec-cell .val.stopval{color:var(--pause-d);}
   .rec-stops{margin-top:9px;padding-top:9px;border-top:1px dashed var(--line);}
   .rec-stops .sh-head{font-size:10px;color:var(--ink3);font-weight:700;margin-bottom:5px;letter-spacing:.03em;}
@@ -564,6 +565,10 @@
 <section class="page" id="page-records">
   <div class="rec-bar">
     <select class="rec-filter" id="recFilter" onchange="renderRecords()"></select>
+    <select class="rec-filter" id="recSort" onchange="renderRecords()">
+      <option value="machine">機械別</option>
+      <option value="date">日付順</option>
+    </select>
     <button class="btn-out" onclick="exportCSV()">⬇ CSV</button>
     <button class="btn-out" onclick="exportJSON()">⬇ バックアップ</button>
   </div>
@@ -1675,6 +1680,13 @@ function renderRecords(){
     return;
   }
 
+  const sortMode = ($('#recSort') && $('#recSort').value) || 'machine';
+  if(sortMode==='date'){
+    recs.sort((a,b)=> new Date(b.startTime)-new Date(a.startTime));   // 新しい日付が上
+    list.innerHTML = recs.map(recCard).join('');
+    return;
+  }
+
   // group by machine, in machine-list order
   const order = store.machines.map(m=>m.id);
   const groups = {};
@@ -1730,6 +1742,7 @@ function recCard(r){
   <div class="rec ${running?'run':''} ${paused?'paused':''} ${over?'over':''}">
     <div class="rec-top">
       <div>
+        <span class="rec-mid">${esc(r.machineId)}</span>
         <div class="rec-part">${esc(r.partNo)}</div>
         ${r.partName?`<div class="rec-pname">${esc(r.partName)}</div>`:''}
       </div>
@@ -2223,7 +2236,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.2';
+const APP_VERSION = '2026-06-28.3';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
