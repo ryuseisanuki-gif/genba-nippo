@@ -369,6 +369,10 @@
   .sum-reasons .rh{font-size:10px;color:var(--ink3);font-weight:700;margin-right:4px;}
   .sum-reasons .rr{display:inline-block;background:var(--pause-bg);color:var(--pause-d);border-radius:12px;padding:2px 9px;margin:2px 4px 2px 0;font-weight:600;}
   .sum-reasons .rr.added{border:1px dashed var(--pause-d);background:repeating-linear-gradient(45deg,#f6e6c4,#f6e6c4 4px,#fdf3df 4px,#fdf3df 6px);}
+  .sum-reasons .rr{cursor:pointer;}
+  .sum-reasons .rr .rr-edit{opacity:.55;font-size:10px;}
+  .es-row{border-top:1px dashed var(--line);padding-top:6px;margin-top:6px;}
+  .es-row:first-child{border-top:none;padding-top:0;margin-top:0;}
   .sum-jobs{font-size:11px;color:var(--ink3);margin-top:9px;}
 
   /* ── Settings ── */
@@ -738,6 +742,18 @@
     <div class="sheet-actions">
       <button class="b-cancel" onclick="closeAddStop()">キャンセル</button>
       <button class="b-ok warn" onclick="confirmAddStop()">停止を追加</button>
+    </div>
+  </div>
+</div>
+<div class="ov" id="editStopSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>停止時間の修正</h3>
+    <p class="add-stop-mc" id="editStopHead"></p>
+    <div id="editStopList"></div>
+    <div class="sheet-actions">
+      <button class="b-cancel" onclick="closeEditStop()">キャンセル</button>
+      <button class="b-ok" onclick="saveEditStop()">保存</button>
     </div>
   </div>
 </div>
@@ -1935,7 +1951,7 @@ function renderSummary(){
     const reasonKeys = Object.keys(s.reasons);
     const reasonsHtml = reasonKeys.length ? `
       <div class="sum-reasons"><span class="rh">記録された停止</span>${
-        reasonKeys.map(k=>`<span class="rr${k.indexOf('後から追加')>=0?' added':''}">${esc(k)} ${durLabel(Math.round(s.reasons[k]))}</span>`).join('')
+        reasonKeys.map(k=>`<span class="rr${k.indexOf('後から追加')>=0?' added':''}" onclick="openEditStops('${esc(m.id)}','${esc(k)}')">${esc(k)} ${durLabel(Math.round(s.reasons[k]))} <span class="rr-edit">✎</span></span>`).join('')
       }</div>` : '';
     return `
     <div class="sum-card">
@@ -2001,6 +2017,62 @@ function confirmAddStop(){
   closeAddStop();
   toast('停止を追加しました','success');
   renderSummary(); renderMachineGrid(); renderStatus();
+}
+
+/* ===== 停止時間の修正（記録された停止チップをタップ） ===== */
+let editStopRefs = [];
+function openEditStops(machineId, reasonKey){
+  const isAdded = reasonKey.indexOf('（後から追加）')>=0;
+  const base = reasonKey.replace('（後から追加）','');
+  const dk = dateKey(summaryDate);
+  const hhmm = d => pad(d.getHours())+':'+pad(d.getMinutes());
+  editStopRefs = []; const rows = [];
+  store.records.filter(r=>r.machineId===machineId).forEach(r=>{
+    (r.stops||[]).forEach((s,idx)=>{
+      if(s.reason!==base) return;
+      if((s.detail==='後から追加') !== isAdded) return;
+      if(dateKey(new Date(s.from))!==dk) return;
+      const ri = editStopRefs.length;
+      editStopRefs.push({ recId:r.id, idx });
+      rows.push(`<div class="es-row"><div class="time-row">
+        <label>開始<input type="time" id="es-from-${ri}" value="${hhmm(new Date(s.from))}"></label>
+        <label>終了<input type="time" id="es-to-${ri}" value="${s.to?hhmm(new Date(s.to)):''}"></label>
+      </div></div>`);
+    });
+  });
+  if(!rows.length){ toast('編集できる停止がありません','error'); return; }
+  $('#editStopHead').textContent = machineId + ' ／ ' + reasonKey + ' ／ ' + fmtDate(summaryDate);
+  $('#editStopList').innerHTML = rows.join('') + '<div class="set-note">終了時刻を空にすると「継続中」になります。押し忘れた終了時刻を入れてください。</div>';
+  $('#editStopSheet').classList.add('active');
+}
+function closeEditStop(){ $('#editStopSheet').classList.remove('active'); }
+function saveEditStop(){
+  const base0 = new Date(summaryDate);
+  let ok = true;
+  editStopRefs.forEach((ref,ri)=>{
+    const r = store.records.find(x=>x.id===ref.recId); if(!r || !r.stops[ref.idx]) return;
+    const s = r.stops[ref.idx];
+    const fv = ($('#es-from-'+ri)||{}).value, tv = ($('#es-to-'+ri)||{}).value;
+    if(!fv){ ok=false; return; }
+    const [fh,fm]=fv.split(':').map(Number);
+    const from=new Date(base0); from.setHours(fh,fm,0,0);
+    if(tv){
+      const [th,tm]=tv.split(':').map(Number);
+      const to=new Date(base0); to.setHours(th,tm,0,0);
+      if(to.getTime()<=from.getTime()){ ok=false; return; }
+      s.from=from.toISOString(); s.to=to.toISOString();
+    } else { s.from=from.toISOString(); s.to=null; }
+  });
+  if(!ok){ toast('時刻を確認してください（終了は開始より後）','error'); return; }
+  // 開いていた停止を閉じたら、停止中のレコードは稼働中に戻す
+  [...new Set(editStopRefs.map(x=>x.recId))].forEach(id=>{
+    const r = store.records.find(x=>x.id===id);
+    if(r && r.status==='stopped' && !openStop(r)) r.status='running';
+  });
+  save();
+  closeEditStop();
+  toast('停止時間を修正しました','success');
+  renderSummary(); renderMachineGrid(); renderStatus(); renderRecords();
 }
 
 /* ===== EXPORT / IMPORT ===== */
@@ -2236,7 +2308,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.4';
+const APP_VERSION = '2026-06-28.5';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
