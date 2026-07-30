@@ -362,6 +362,10 @@
   .aset-fields{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
   .aset-fields label{flex:1;min-width:88px;font-size:10px;color:var(--ink3);font-weight:700;display:flex;flex-direction:column;gap:4px;}
   .aset-fields input{background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;font-family:var(--mono);color:var(--ink);}
+  .sd-add{margin-top:8px;}
+  .sd-dates{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+  .sd-dates input{flex:1;background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:9px;font-size:14px;font-family:var(--mono);color:var(--ink);}
+  .sd-dates span{color:var(--ink3);font-weight:700;}
   .qty-edit{width:100%;box-sizing:border-box;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-top:2px;font-family:var(--mono);font-size:16px;font-weight:700;color:var(--orange-d);text-align:center;}
   .qty-edit:focus{outline:none;border-color:var(--orange);}
   .qty-edit.missing{border:1.5px dashed var(--orange);background:#fff7ee;}
@@ -621,6 +625,16 @@
   </div>
 
   <div class="card set-card">
+    <h3>🛌 休止期間（稼働しない日）</h3>
+    <div id="shutdownList"></div>
+    <div class="sd-add">
+      <div class="sd-dates"><input type="date" id="newSdFrom"><span>〜</span><input type="date" id="newSdTo"></div>
+      <div class="add-row"><input type="text" id="newSdLabel" placeholder="名称（例 お盆休み）"><button class="btn-add" onclick="addShutdown()">追加</button></div>
+    </div>
+    <div class="set-note">登録した期間は自動記録を作らず、日別集計でも「休業」として稼働率・平均から除外します（お盆・年末年始・メンテ等）。</div>
+  </div>
+
+  <div class="card set-card">
     <h3>💾 データ</h3>
     <div class="danger-row">
       <label class="btn-out" style="cursor:pointer">
@@ -774,7 +788,7 @@
 const $ = s => document.querySelector(s);
 
 /* ===== STORE ===== */
-let store = { machines: [], records: [], coils: [] };
+let store = { machines: [], records: [], coils: [], shutdowns: [] };
 const KEY = 'genbaNippoData_v1';
 
 function load(){
@@ -782,6 +796,7 @@ function load(){
   if(!store.machines) store.machines = [];
   if(!store.records) store.records = [];
   if(!Array.isArray(store.coils)) store.coils = [];
+  if(!Array.isArray(store.shutdowns)) store.shutdowns = [];
   store.records.forEach(r=>{
     if(!Array.isArray(r.stops)) r.stops = [];
     if(!('lastRunEnd' in r)) r.lastRunEnd = null;
@@ -809,7 +824,7 @@ const firebaseConfig = {
   appId: "1:984544822288:web:2264697646f7b6df497695"
 };
 let db = null, fbReady = false, initialSyncDone = false;
-const firstSnap = { machines:false, records:false, coils:false };
+const firstSnap = { machines:false, records:false, coils:false, shutdowns:false };
 const lastSynced = {};   // "machines/<id>" | "records/<id>" -> JSON文字列（エコー再送防止）
 
 function setSyncStatus(s){
@@ -836,9 +851,10 @@ function attachListeners(){
   db.collection('machines').onSnapshot(s=>applySnap('machines', s), e=>{ console.warn('machines listen', e); setSyncStatus('offline'); });
   db.collection('records').onSnapshot(s=>applySnap('records', s), e=>{ console.warn('records listen', e); setSyncStatus('offline'); });
   db.collection('coils').onSnapshot(s=>applySnap('coils', s), e=>{ console.warn('coils listen', e); setSyncStatus('offline'); });
+  db.collection('shutdowns').onSnapshot(s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
 }
 function applySnap(kind, snap){
-  const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : store.records;
+  const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : store.records;
   snap.docChanges().forEach(ch=>{
     const id = ch.doc.id, data = ch.doc.data();
     const i = arr.findIndex(x=>x.id===id);
@@ -847,7 +863,7 @@ function applySnap(kind, snap){
   });
   try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){}
   firstSnap[kind] = true;
-  if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils){ initialSyncDone = true; syncPush(); }
+  if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns){ initialSyncDone = true; syncPush(); }
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
 }
@@ -857,6 +873,7 @@ function syncPush(){
   store.machines.forEach(m=> cur['machines/'+m.id] = m);
   store.records.forEach(r=> cur['records/'+r.id] = r);
   store.coils.forEach(c=> cur['coils/'+c.id] = c);
+  store.shutdowns.forEach(sd=> cur['shutdowns/'+sd.id] = sd);
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -1311,6 +1328,10 @@ function processDayBoundaries(){
   if(changed) save();
   return changed;
 }
+function isShutdown(dayDate){
+  const dk = dateKey(dayDate);
+  return (store.shutdowns||[]).find(sd => sd && sd.from && sd.to && sd.from<=dk && dk<=sd.to) || null;
+}
 /* ===== 自動記録（毎日 9:00開始 / 17:00終了・1日1記録） ===== */
 function newAutoRecord(m, a, startDate, endDate){
   return {
@@ -1331,6 +1352,7 @@ function processAutoDaily(){
   const nine = new Date(today); nine.setHours(STD_START_H,0,0,0);
   const seventeen = new Date(today); seventeen.setHours(STD_END_H,0,0,0);
   const dk = dateKey(today);
+  const shut = isShutdown(today);   // 休止期間は自動記録を作らない
   let changed = false;
   store.machines.forEach(m=>{
     const a = m.auto;
@@ -1360,10 +1382,10 @@ function processAutoDaily(){
         }
       });
       // 今日ぶんが未作成（日中アプリ未起動）→ 9:00-17:00の記録を作って完了にする
-      if(todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, seventeen)); changed = true; }
+      if(!shut && todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, seventeen)); changed = true; }
     } else if(now >= nine.getTime()){
       // 9:00〜17:00：今日ぶんが無ければ自動開始
-      if(todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, null)); changed = true; }
+      if(!shut && todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, null)); changed = true; }
     }
   });
   if(changed) save();
@@ -1925,6 +1947,14 @@ function renderSummary(){
   const isToday = d.getTime() === today.getTime();
   $('#sumDateLabel').textContent = fmtDate(d) + (isToday ? '（今日）' : '');
 
+  // 休止期間（稼働しない日）は集計対象外
+  const shut = isShutdown(d);
+  if(shut){
+    $('#sumDayMeta').innerHTML = `<div class="dm" style="grid-column:1/-1"><div class="lab">この日は</div><div class="val">🛌 休業${shut.label?'（'+esc(shut.label)+'）':''}</div></div>`;
+    $('#summaryList').innerHTML = `<div class="empty"><div class="e-ic">🛌</div><div class="e-t">休業日${shut.label?'（'+esc(shut.label)+'）':''}</div><div class="e-t" style="font-size:12px;color:var(--ink3);font-weight:600">この期間は稼働率・平均・目標の対象外です</div></div>`;
+    return;
+  }
+
   // day totals
   let totalQty = 0, totalRun = 0, totalWork = 0;
   store.machines.forEach(m=>{
@@ -2212,6 +2242,33 @@ function renderCoilSettings(){
       <button class="x" onclick="deleteCoil('${esc(c.id)}')">✕</button>
     </div>`).join('');
 }
+function renderShutdownSettings(){
+  const el=$('#shutdownList'); if(!el) return;
+  const list=(store.shutdowns||[]).slice().sort((a,b)=> a.from<b.from?1:-1);
+  if(!list.length){ el.innerHTML='<div class="set-note">休止期間は未登録です。下から追加してください。</div>'; return; }
+  el.innerHTML=list.map(sd=>`<div class="mset">
+    <span class="mi-name" style="flex:1">${esc((sd.from||'').replace(/-/g,'/'))} 〜 ${esc((sd.to||'').replace(/-/g,'/'))}${sd.label?'　'+esc(sd.label):''}</span>
+    <button class="x" onclick="deleteShutdown('${esc(sd.id)}')">✕</button>
+  </div>`).join('');
+}
+function addShutdown(){
+  const from=$('#newSdFrom').value, to=$('#newSdTo').value, label=$('#newSdLabel').value.trim();
+  if(!from||!to){ toast('開始日と終了日を入力してください','error'); return; }
+  const f=(from<=to)?from:to, t=(from<=to)?to:from;
+  store.shutdowns=store.shutdowns||[];
+  store.shutdowns.push({ id:'s'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), from:f, to:t, label });
+  save();
+  $('#newSdFrom').value=''; $('#newSdTo').value=''; $('#newSdLabel').value='';
+  renderShutdownSettings(); processAutoDaily(); refreshActiveViews();
+  toast('休止期間を追加しました','success');
+}
+async function deleteShutdown(id){
+  const ok=await confirmDialog('休止期間の削除','この休止期間を削除します。','削除する',true);
+  if(!ok) return;
+  store.shutdowns=(store.shutdowns||[]).filter(s=>s.id!==id);
+  save(); renderShutdownSettings(); refreshActiveViews();
+  toast('削除しました');
+}
 function renderAutoSettings(){
   const el=$('#autoSettingsList'); if(!el) return;
   if(!store.machines.length){ el.innerHTML='<div class="set-note">機械が未登録です。</div>'; return; }
@@ -2308,7 +2365,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.5';
+const APP_VERSION = '2026-06-28.6';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
@@ -2340,6 +2397,7 @@ function init(){
   renderMachineSettings();
   renderCoilSettings();
   renderAutoSettings();
+  renderShutdownSettings();
   renderCoilSelect();
   renderRpm();
   clockTick();
