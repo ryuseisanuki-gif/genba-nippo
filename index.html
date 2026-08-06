@@ -771,6 +771,19 @@
     </div>
   </div>
 </div>
+<div class="ov" id="editSdSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>休止期間の編集</h3>
+    <p class="set-note" style="margin-top:-2px">一部の日だけ動かすことになったら、日付を縮めてください（例：終了日を早める）。<b>途中の日</b>だけ動かす場合は、この期間を縮めて残りの休みを新規で追加すると分割できます。</p>
+    <div class="sd-dates" style="margin-top:10px"><input type="date" id="esdFrom"><span>〜</span><input type="date" id="esdTo"></div>
+    <div class="add-row" style="margin-top:8px"><select id="esdMachine" class="rec-filter"></select><input type="text" id="esdLabel" placeholder="名称（任意）"></div>
+    <div class="sheet-actions">
+      <button class="b-cancel" onclick="closeEditSd()">キャンセル</button>
+      <button class="b-ok" onclick="saveEditSd()">保存</button>
+    </div>
+  </div>
+</div>
 <div id="updateBar" class="hidden">
   <span>新しいバージョンがあります</span>
   <button class="u-go" onclick="applyUpdate()">今すぐ更新</button>
@@ -2254,7 +2267,7 @@ function renderShutdownSettings(){
   const list=(store.shutdowns||[]).slice().sort((a,b)=> a.from<b.from?1:-1);
   if(!list.length){ el.innerHTML='<div class="set-note">休止期間は未登録です。下から追加してください。</div>'; return; }
   el.innerHTML=list.map(sd=>`<div class="mset">
-    <span class="mi-name" style="flex:1"><b>${sd.machineId?esc(sd.machineId):'全機械'}</b>　${esc((sd.from||'').replace(/-/g,'/'))} 〜 ${esc((sd.to||'').replace(/-/g,'/'))}${sd.label?'　'+esc(sd.label):''}</span>
+    <span class="mi-name" style="flex:1;cursor:pointer" onclick="openEditShutdown('${esc(sd.id)}')"><b>${sd.machineId?esc(sd.machineId):'全機械'}</b>　${esc((sd.from||'').replace(/-/g,'/'))} 〜 ${esc((sd.to||'').replace(/-/g,'/'))}${sd.label?'　'+esc(sd.label):''} <span style="opacity:.45">✎</span></span>
     <button class="x" onclick="deleteShutdown('${esc(sd.id)}')">✕</button>
   </div>`).join('');
 }
@@ -2276,6 +2289,24 @@ async function deleteShutdown(id){
   store.shutdowns=(store.shutdowns||[]).filter(s=>s.id!==id);
   save(); renderShutdownSettings(); refreshActiveViews();
   toast('削除しました');
+}
+let editSdId = null;
+function openEditShutdown(id){
+  const sd=(store.shutdowns||[]).find(s=>s.id===id); if(!sd) return;
+  editSdId=id;
+  $('#esdFrom').value=sd.from||''; $('#esdTo').value=sd.to||''; $('#esdLabel').value=sd.label||'';
+  const sel=$('#esdMachine'); sel.innerHTML='<option value="">全機械</option>'+store.machines.map(m=>`<option value="${esc(m.id)}">${esc(m.id)}</option>`).join(''); sel.value=sd.machineId||'';
+  $('#editSdSheet').classList.add('active');
+}
+function closeEditSd(){ $('#editSdSheet').classList.remove('active'); }
+function saveEditSd(){
+  const sd=(store.shutdowns||[]).find(s=>s.id===editSdId); if(!sd){ closeEditSd(); return; }
+  const from=$('#esdFrom').value, to=$('#esdTo').value;
+  if(!from||!to){ toast('開始日と終了日を入力してください','error'); return; }
+  sd.from=(from<=to)?from:to; sd.to=(from<=to)?to:from;
+  sd.machineId=($('#esdMachine')||{}).value||''; sd.label=$('#esdLabel').value.trim();
+  save(); closeEditSd(); renderShutdownSettings(); processAutoDaily(); refreshActiveViews();
+  toast('休止期間を更新しました','success');
 }
 function renderAutoSettings(){
   const el=$('#autoSettingsList'); if(!el) return;
@@ -2373,7 +2404,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.7';
+const APP_VERSION = '2026-06-28.8';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
