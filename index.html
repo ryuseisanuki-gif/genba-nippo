@@ -1475,7 +1475,12 @@ function refreshActiveViews(){
   renderCoilSelect();
   if($('#page-summary').classList.contains('active')) renderSummary();
   if($('#page-records').classList.contains('active')) renderRecords();
-  if($('#page-settings').classList.contains('active')) renderCoilSettings();
+  if($('#page-settings').classList.contains('active')){
+    renderMachineSettings();
+    renderCoilSettings();
+    renderAutoSettings();
+    renderShutdownSettings();   // 他端末で追加/編集した休止期間もリアルタイム反映
+  }
 }
 // periodic + on-demand boundary check (non-blocking: just notify, never auto-popup)
 // 休憩の自動停止/再開（12:00-12:45, 15:00-15:15）。アプリが開いている間だけ動作（集計は常に休憩控除）。
@@ -2404,7 +2409,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.8';
+const APP_VERSION = '2026-06-28.9';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
