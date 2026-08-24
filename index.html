@@ -929,6 +929,13 @@ const firebaseConfig = {
   appId: "1:984544822288:web:2264697646f7b6df497695"
 };
 let db = null, fbReady = false, initialSyncDone = false;
+// 初回同期が終わるまで自動記録を新規作成しない（複数端末が同時起動して同じ日の記録を二重に作るのを防ぐ）
+let autoCreateReady = false;
+function enableAutoCreate(){
+  if(autoCreateReady) return;
+  autoCreateReady = true;
+  if(processAutoDaily()) { refreshActiveViews(); }
+}
 const firstSnap = { machines:false, records:false, coils:false, shutdowns:false, workdays:false };
 const lastSynced = {};   // "machines/<id>" | "records/<id>" -> JSON文字列（エコー再送防止）
 
@@ -940,7 +947,7 @@ function setSyncStatus(s){
 function splitKey(k){ const i = k.indexOf('/'); return [k.slice(0,i), k.slice(i+1)]; }
 
 function initSync(){
-  if(!window.firebase || !firebaseConfig.apiKey){ setSyncStatus('offline'); return; }
+  if(!window.firebase || !firebaseConfig.apiKey){ setSyncStatus('offline'); enableAutoCreate(); return; }
   try{
     firebase.initializeApp(firebaseConfig);
     db = firebase.firestore();
@@ -949,8 +956,10 @@ function initSync(){
     firebase.auth().onAuthStateChanged(u=>{
       if(u){ fbReady = true; setSyncStatus('online'); attachListeners(); }
     });
-    firebase.auth().signInAnonymously().catch(e=>{ console.warn('anon auth failed', e); setSyncStatus('offline'); });
-  }catch(e){ console.warn('firebase init failed', e); setSyncStatus('offline'); }
+    firebase.auth().signInAnonymously().catch(e=>{ console.warn('anon auth failed', e); setSyncStatus('offline'); enableAutoCreate(); });
+    // 圏外などで同期できない場合も、一定時間後には自動記録を作れるようにする
+    setTimeout(enableAutoCreate, 12000);
+  }catch(e){ console.warn('firebase init failed', e); setSyncStatus('offline'); enableAutoCreate(); }
 }
 function attachListeners(){
   db.collection('machines').onSnapshot(s=>applySnap('machines', s), e=>{ console.warn('machines listen', e); setSyncStatus('offline'); });
@@ -969,7 +978,11 @@ function applySnap(kind, snap){
   });
   try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){}
   firstSnap[kind] = true;
-  if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns && firstSnap.workdays){ initialSyncDone = true; syncPush(); }
+  if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns && firstSnap.workdays){
+    initialSyncDone = true;
+    enableAutoCreate();   // 全端末のデータが揃ってから自動記録を作る（二重作成の防止）
+    syncPush();
+  }
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
 }
@@ -1031,10 +1044,20 @@ function toast(msg, type=''){
   clearTimeout(toastT); toastT = setTimeout(()=>t.classList.remove('show'), 2400);
 }
 function machineName(id){ const m = store.machines.find(x=>x.id===id); return m? m.name : ''; }
-function runningFor(id){ return store.records.find(r=>r.machineId===id && r.status==='running'); }
-function stoppedFor(id){ return store.records.find(r=>r.machineId===id && r.status==='stopped'); }
-function overnightFor(id){ return store.records.find(r=>r.machineId===id && r.status==='overnight'); }
-function activeFor(id){ return store.records.find(r=>r.machineId===id && (r.status==='running'||r.status==='stopped'||r.status==='overnight')); }
+// 同じ機械に有効な記録が複数あっても、全端末が必ず同じ1件を選ぶ（開始が早い順→id順）。
+// store.records の並び順は端末ごとに違う（同期の受信順）ため find() だけでは端末間でズレる。
+function pickRec(list){
+  if(list.length<=1) return list[0] || null;
+  return list.slice().sort((a,b)=>{
+    const ta=new Date(a.startTime).getTime(), tb=new Date(b.startTime).getTime();
+    if(ta!==tb) return ta-tb;
+    return a.id<b.id ? -1 : a.id>b.id ? 1 : 0;
+  })[0];
+}
+function runningFor(id){ return pickRec(store.records.filter(r=>r.machineId===id && r.status==='running')); }
+function stoppedFor(id){ return pickRec(store.records.filter(r=>r.machineId===id && r.status==='stopped')); }
+function overnightFor(id){ return pickRec(store.records.filter(r=>r.machineId===id && r.status==='overnight')); }
+function activeFor(id){ return pickRec(store.records.filter(r=>r.machineId===id && (r.status==='running'||r.status==='stopped'||r.status==='overnight'))); }
 function openStop(r){ return r && r.stops ? r.stops.find(s=>!s.to) : null; }
 
 /* ── date / multi-day helpers ── */
@@ -1181,6 +1204,7 @@ function renderStatus(){
   const run = selectedMachineId ? runningFor(selectedMachineId) : null;
   const paused = selectedMachineId ? stoppedFor(selectedMachineId) : null;
   const over = selectedMachineId ? overnightFor(selectedMachineId) : null;
+  statusRecId = (run || paused || over || {}).id || null;   // タイマーは必ずこの記録を見る
 
   if(run){
     const stMin = totalStopMin(run);
@@ -1298,8 +1322,10 @@ function manualResume(){
 
 /* live timer (running → today's session, stopped → current stop) */
 let timerInt = null;
+let statusRecId = null;   // いま画面に出している記録のid（タイマーが別の記録を見ないように）
 function timerFrom(){
-  const r = selectedMachineId ? activeFor(selectedMachineId) : null;
+  const r = statusRecId ? store.records.find(x=>x.id===statusRecId)
+          : (selectedMachineId ? activeFor(selectedMachineId) : null);
   if(!r) return null;
   if(r.status==='stopped'){ const os = openStop(r); return os ? os.from : r.sessionStart; }
   if(r.status==='running'){ return r.sessionStart || r.startTime; }
@@ -1524,6 +1550,31 @@ function newAutoRecord(m, a, startDate, endDate){
     status: endDate ? 'done' : 'running'
   };
 }
+// 同じ機械・同じ日に自動記録が重複したら、中身の無いものだけ削除する。
+// （停止・生産個数・終了個数が入っている記録は絶対に消さない）
+function dedupeAutoRecords(){
+  const groups = {};
+  store.records.forEach(r=>{
+    if(r.auto!==true) return;
+    const k = r.machineId + '|' + dateKey(new Date(r.startTime));
+    (groups[k] = groups[k] || []).push(r);
+  });
+  const hasData = r => (r.stops||[]).length>0 || (r.dailyCounts||[]).length>0 || (r.qty!=null && r.qty!=='');
+  const drop = [];
+  Object.values(groups).forEach(list=>{
+    if(list.length<2) return;
+    // 残す1件：中身のあるものを優先し、同条件なら全端末で同じになるようid順
+    const keep = list.slice().sort((a,b)=>{
+      const da = hasData(a)?0:1, db2 = hasData(b)?0:1;
+      if(da!==db2) return da-db2;
+      return a.id<b.id ? -1 : a.id>b.id ? 1 : 0;
+    })[0];
+    list.forEach(r=>{ if(r!==keep && !hasData(r)) drop.push(r.id); });
+  });
+  if(!drop.length) return false;
+  store.records = store.records.filter(r=> !drop.includes(r.id));
+  return true;
+}
 function processAutoDaily(){
   const now = Date.now();
   const today = new Date(); today.setHours(0,0,0,0);
@@ -1532,6 +1583,7 @@ function processAutoDaily(){
   const dk = dateKey(today);
   const off = offDay(today);               // 土日祝は自動記録を作らない（稼働指定した日は作る）
   let changed = false;
+  if(dedupeAutoRecords()) changed = true;  // 端末の同時起動でできた「中身の無い重複」を掃除
   store.machines.forEach(m=>{
     const a = m.auto;
     if(!a || !a.on) return;
@@ -1561,10 +1613,10 @@ function processAutoDaily(){
         }
       });
       // 今日ぶんが未作成（日中アプリ未起動）→ 9:00-17:00の記録を作って完了にする
-      if(!shut && todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, seventeen)); changed = true; }
+      if(autoCreateReady && !shut && todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, seventeen)); changed = true; }
     } else if(now >= nine.getTime()){
-      // 9:00〜17:00：今日ぶんが無ければ自動開始
-      if(!shut && todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, null)); changed = true; }
+      // 9:00〜17:00：今日ぶんが無ければ自動開始（初回同期が終わるまでは作らない）
+      if(autoCreateReady && !shut && todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, null)); changed = true; }
     }
   });
   if(changed) save();
@@ -2686,7 +2738,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.12';
+const APP_VERSION = '2026-06-28.13';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
