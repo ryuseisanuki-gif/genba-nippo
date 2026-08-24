@@ -309,6 +309,49 @@
   .day-meta .dm .lab{font-size:11px;color:#aab4c2;font-weight:600;}
   .day-meta .dm .val{font-size:21px;font-weight:900;font-family:var(--mono);margin-top:2px;}
   .day-meta .dm .val small{font-size:12px;font-weight:600;}
+  /* 月表示は3枠なので詰める */
+  .day-meta.m3 .dm{padding:10px 9px;}
+  .day-meta.m3 .dm .lab{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .day-meta.m3 .dm .val{font-size:18px;white-space:nowrap;}
+  .day-meta.m3 .dm .val small{font-size:11px;}
+
+  /* ── 日/月 切り替え ── */
+  .seg-tabs{display:flex;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:5px;margin-bottom:10px;}
+  .seg-tabs .sgb{flex:1;padding:10px 0;border-radius:9px;border:none;background:transparent;font-family:var(--sans);font-size:14px;font-weight:700;color:var(--ink2);}
+  .seg-tabs .sgb.sel{background:var(--ink);color:#fff;}
+  .seg-tabs .sgb:active{transform:scale(.98);}
+
+  /* ── 月カレンダー ── */
+  .cal{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px;}
+  .cal-wd{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;}
+  .cal-wd span{text-align:center;font-size:11px;font-weight:700;color:var(--ink3);padding:2px 0;}
+  .cal-wd span.sun{color:var(--stop);}
+  .cal-wd span.sat{color:var(--blue);}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+  .cal-c{
+    min-height:60px;border:1px solid var(--line);border-radius:9px;background:var(--surface2);
+    padding:4px 2px 3px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:1px;
+  }
+  .cal-c:active{transform:scale(.95);}
+  .cal-c.blank{border:none;background:transparent;}
+  .cal-c .dn{font-size:12px;font-weight:700;color:var(--ink2);font-family:var(--mono);line-height:1.15;}
+  .cal-c .dn.sun{color:var(--stop);}
+  .cal-c .dn.sat{color:var(--blue);}
+  .cal-c .rt{font-size:13px;font-weight:900;font-family:var(--mono);line-height:1.2;color:var(--ink3);}
+  .cal-c .qt{font-size:9px;font-weight:600;color:var(--ink3);font-family:var(--mono);line-height:1.1;}
+  .cal-c.good{background:var(--run-bg);border-color:#bfe3cb;}
+  .cal-c.good .rt{color:var(--run-d);}
+  .cal-c.mid{background:var(--pause-bg);border-color:#ecd7a6;}
+  .cal-c.mid .rt{color:var(--pause-d);}
+  .cal-c.bad{background:var(--stop-bg);border-color:#eec4bf;}
+  .cal-c.bad .rt{color:var(--stop-d);}
+  .cal-c.shut{background:var(--steel);}
+  .cal-c.shut .rt{font-size:11px;font-weight:700;color:var(--ink3);}
+  .cal-c.future{background:var(--surface);}
+  .cal-c.today{box-shadow:0 0 0 2px var(--orange);}
+  .cal-legend{display:flex;flex-wrap:wrap;gap:9px;margin-top:10px;font-size:10.5px;color:var(--ink2);font-weight:600;}
+  .cal-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px;}
+
   .sum-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:11px;}
   .sum-head{display:flex;align-items:center;gap:8px;margin-bottom:11px;}
   .sum-head .sid{font-family:var(--mono);font-weight:700;font-size:17px;color:var(--ink);}
@@ -585,6 +628,10 @@
 
 <!-- ===== DAILY SUMMARY ===== -->
 <section class="page" id="page-summary">
+  <div class="seg-tabs">
+    <button class="sgb sel" id="vtDay" onclick="setSummaryView('day')">日</button>
+    <button class="sgb" id="vtMonth" onclick="setSummaryView('month')">月</button>
+  </div>
   <div class="day-nav">
     <button class="day-arrow" onclick="changeSummaryDate(-1)">◀</button>
     <div class="day-label" id="sumDateLabel" onclick="goToday()">—</div>
@@ -592,6 +639,7 @@
   </div>
   <div class="day-meta" id="sumDayMeta"></div>
   <div id="summaryList"></div>
+  <div id="summaryMonth" style="display:none"></div>
 </section>
 
 <!-- ===== SETTINGS ===== -->
@@ -911,6 +959,7 @@ let selectedMachineId = null;
 let selectedCoilId = null;
 let scan = { raw:'', partNo:'', partName:'', qty:'', due:'' };
 let summaryDate = (()=>{ const d=new Date(); d.setHours(0,0,0,0); return d; })();
+let summaryView = 'day';   // 'day' | 'month'
 const STD_START_H = 9, STD_END_H = 17, STD_MIN = (STD_END_H - STD_START_H) * 60;
 
 /* ===== UTILS ===== */
@@ -1827,12 +1876,26 @@ async function deleteRecord(id){
 
 /* ===== DAILY SUMMARY ===== */
 function changeSummaryDate(delta){
-  summaryDate.setDate(summaryDate.getDate()+delta);
+  if(summaryView==='month'){
+    // 月送り（月末日は繰り上がらないようにクランプ）
+    const y=summaryDate.getFullYear(), mo=summaryDate.getMonth(), da=summaryDate.getDate();
+    const last=new Date(y, mo+delta+1, 0).getDate();
+    summaryDate=new Date(y, mo+delta, Math.min(da,last)); summaryDate.setHours(0,0,0,0);
+  } else {
+    summaryDate.setDate(summaryDate.getDate()+delta);
+  }
   renderSummary();
 }
 function goToday(){
   const d=new Date(); d.setHours(0,0,0,0); summaryDate=d;
   renderSummary();
+}
+function setSummaryView(v){ summaryView=v; renderSummary(); }
+function pickDay(k){
+  const [y,m,d]=k.split('-').map(Number);
+  summaryDate=new Date(y,m-1,d); summaryDate.setHours(0,0,0,0);
+  summaryView='day'; renderSummary();
+  try{ window.scrollTo({top:0,behavior:'smooth'}); }catch(e){ window.scrollTo(0,0); }
 }
 function clipMin(s,e,ws,we){ const a=Math.max(s,ws), b=Math.min(e,we); return Math.max(0,(b-a)/60000); }
 
@@ -1959,7 +2022,74 @@ function summaryTimeline(machineId, dayDate){
   return segs.map(g=>({ state: g.state, pct: g.n/total*100 }));
 }
 
+/* 1日ぶんの全機械合計（休業の機械は除外） */
+function dayAgg(d){
+  const active = store.machines.filter(m=> !isShutdown(d, m.id));
+  const allShut = store.machines.length>0 && active.length===0;
+  let qty=0, run=0, work=0, recs=0;
+  active.forEach(m=>{ const s=summaryFor(m.id, d); qty+=s.qty; run+=s.runMin; work+=s.workWindow; recs+=s.finishedCount; });
+  return { qty, run, work, recs, allShut, rate: work>0 ? Math.round(run/work*100) : null };
+}
+/* 月カレンダー：日付タップで日別詳細へ */
+function renderSummaryMonth(){
+  const y = summaryDate.getFullYear(), mo = summaryDate.getMonth();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const isThisMonth = (y===today.getFullYear() && mo===today.getMonth());
+  $('#sumDateLabel').textContent = `${y}年${mo+1}月` + (isThisMonth ? '（今月）' : '');
+
+  const firstWd = new Date(y, mo, 1).getDay();
+  const lastDate = new Date(y, mo+1, 0).getDate();
+  let mQty=0, mRun=0, mWork=0, mDays=0;
+  const cells = [];
+  for(let i=0;i<firstWd;i++) cells.push('<div class="cal-c blank"></div>');
+  for(let day=1; day<=lastDate; day++){
+    const d = new Date(y, mo, day); d.setHours(0,0,0,0);
+    const wd = d.getDay();
+    const dnCls = wd===0 ? ' sun' : wd===6 ? ' sat' : '';
+    const isToday = d.getTime()===today.getTime();
+    let cls='future', mid='<div class="rt">–</div>', sub='';
+    if(d.getTime() <= today.getTime()){
+      const a = dayAgg(d);
+      if(a.allShut){ cls='shut'; mid='<div class="rt">休業</div>'; }
+      else{
+        const r = a.rate;
+        cls = r==null ? 'future' : r>=90 ? 'good' : r>=60 ? 'mid' : 'bad';
+        mid = `<div class="rt">${r==null?'–':r+'%'}</div>`;
+        if(a.qty>0) sub = `<div class="qt">${a.qty.toLocaleString()}</div>`;
+        if(a.recs>0 || a.run>0){ mQty+=a.qty; mRun+=a.run; mWork+=a.work; mDays++; }
+      }
+    }
+    cells.push(`<div class="cal-c ${cls}${isToday?' today':''}" onclick="pickDay('${dateKey(d)}')"><div class="dn${dnCls}">${day}</div>${mid}${sub}</div>`);
+  }
+  const avg = mWork>0 ? Math.round(mRun/mWork*100) : null;
+  $('#sumDayMeta').className = 'day-meta m3';
+  $('#sumDayMeta').innerHTML = `
+    <div class="dm"><div class="lab">月の生産個数</div><div class="val">${mQty.toLocaleString()}<small> 個</small></div></div>
+    <div class="dm"><div class="lab">平均稼働率</div><div class="val">${avg==null?'—':avg+'<small> %</small>'}</div></div>
+    <div class="dm"><div class="lab">稼働日数</div><div class="val">${mDays}<small> 日</small></div></div>`;
+  $('#summaryMonth').innerHTML = `
+    <div class="cal">
+      <div class="cal-wd">${WD.map((w,i)=>`<span class="${i===0?'sun':i===6?'sat':''}">${w}</span>`).join('')}</div>
+      <div class="cal-grid">${cells.join('')}</div>
+      <div class="cal-legend">
+        <span><i style="background:var(--run-bg);border:1px solid #bfe3cb"></i>90%以上</span>
+        <span><i style="background:var(--pause-bg);border:1px solid #ecd7a6"></i>60〜89%</span>
+        <span><i style="background:var(--stop-bg);border:1px solid #eec4bf"></i>60%未満</span>
+        <span><i style="background:var(--steel);border:1px solid var(--line)"></i>休業</span>
+        <span>大きい数字＝稼働率／下の数字＝生産個数</span>
+      </div>
+      <div class="set-note" style="margin-top:9px">日付をタップすると、その日の詳細（時間帯グラフ・停止理由）に切り替わります。</div>
+    </div>`;
+}
 function renderSummary(){
+  const isMonth = (summaryView==='month');
+  $('#vtDay').classList.toggle('sel', !isMonth);
+  $('#vtMonth').classList.toggle('sel', isMonth);
+  $('#summaryList').style.display  = isMonth ? 'none' : '';
+  $('#summaryMonth').style.display = isMonth ? '' : 'none';
+  if(isMonth){ renderSummaryMonth(); return; }
+  $('#sumDayMeta').className = 'day-meta';
+
   const d = summaryDate;
   const today = new Date(); today.setHours(0,0,0,0);
   const isToday = d.getTime() === today.getTime();
@@ -2409,7 +2539,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.9';
+const APP_VERSION = '2026-06-28.10';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
