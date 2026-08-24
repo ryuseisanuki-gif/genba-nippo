@@ -104,6 +104,7 @@
   .tab.active{color:var(--orange);border-bottom-color:var(--orange);}
   .page{display:none;padding:16px 14px calc(40px + var(--safe-b));max-width:620px;margin:0 auto;}
   .page.active{display:block;}
+  .page.wide{max-width:1100px;}   /* 月カレンダー表示中はワイドに */
 
   /* ── Step blocks ── */
   .step{margin-bottom:14px;}
@@ -322,23 +323,45 @@
   .seg-tabs .sgb:active{transform:scale(.98);}
 
   /* ── 月カレンダー ── */
-  .cal{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px;}
-  .cal-wd{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;}
-  .cal-wd span{text-align:center;font-size:11px;font-weight:700;color:var(--ink3);padding:2px 0;}
+  .cal{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:8px;}
+  .cal-wd{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:7px;}
+  .cal-wd span{text-align:center;font-size:12px;font-weight:700;color:var(--ink3);padding:2px 0;}
   .cal-wd span.sun{color:var(--stop);}
   .cal-wd span.sat{color:var(--blue);}
   .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
   .cal-c{
-    min-height:60px;border:1px solid var(--line);border-radius:9px;background:var(--surface2);
-    padding:4px 2px 3px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:1px;
+    min-height:74px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);
+    padding:6px 1px 5px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:2px;
   }
   .cal-c:active{transform:scale(.95);}
   .cal-c.blank{border:none;background:transparent;}
-  .cal-c .dn{font-size:12px;font-weight:700;color:var(--ink2);font-family:var(--mono);line-height:1.15;}
+  .cal-c .dn{font-size:14px;font-weight:700;color:var(--ink2);font-family:var(--mono);line-height:1.15;}
   .cal-c .dn.sun{color:var(--stop);}
   .cal-c .dn.sat{color:var(--blue);}
-  .cal-c .rt{font-size:13px;font-weight:900;font-family:var(--mono);line-height:1.2;color:var(--ink3);}
-  .cal-c .qt{font-size:9px;font-weight:600;color:var(--ink3);font-family:var(--mono);line-height:1.1;}
+  .cal-c .rt{font-size:16px;font-weight:900;font-family:var(--mono);line-height:1.2;color:var(--ink3);}
+  .cal-c .qt{font-size:10.5px;font-weight:600;color:var(--ink3);font-family:var(--mono);line-height:1.15;}
+  /* 画面が広いとき（タブレット・PC）はさらに大きく */
+  @media (min-width:660px){
+    .cal{padding:16px;border-radius:16px;}
+    .cal-wd{gap:8px;margin-bottom:9px;}
+    .cal-wd span{font-size:14px;}
+    .cal-grid{gap:8px;}
+    .cal-c{min-height:104px;border-radius:12px;padding:9px 5px 8px;gap:3px;}
+    .cal-c .dn{font-size:17px;}
+    .cal-c .rt{font-size:24px;}
+    .cal-c .qt{font-size:13px;}
+    .seg-tabs .sgb{font-size:16px;padding:13px 0;}
+    .day-meta.m3 .dm{padding:14px 18px;}
+    .day-meta.m3 .dm .lab{font-size:12.5px;}
+    .day-meta.m3 .dm .val{font-size:27px;}
+    .day-meta.m3 .dm .val small{font-size:14px;}
+  }
+  @media (min-width:1000px){
+    .cal-c{min-height:118px;}
+    .cal-c .rt{font-size:28px;}
+    .cal-c .dn{font-size:18px;}
+    .cal-c .qt{font-size:14px;}
+  }
   .cal-c.good{background:var(--run-bg);border-color:#bfe3cb;}
   .cal-c.good .rt{color:var(--run-d);}
   .cal-c.mid{background:var(--pause-bg);border-color:#ecd7a6;}
@@ -349,8 +372,12 @@
   .cal-c.shut .rt{font-size:11px;font-weight:700;color:var(--ink3);}
   .cal-c.future{background:var(--surface);}
   .cal-c.today{box-shadow:0 0 0 2px var(--orange);}
-  .cal-legend{display:flex;flex-wrap:wrap;gap:9px;margin-top:10px;font-size:10.5px;color:var(--ink2);font-weight:600;}
-  .cal-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px;}
+  .cal-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:11px;font-size:11.5px;color:var(--ink2);font-weight:600;}
+  .cal-legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px;}
+  @media (min-width:660px){
+    .cal-legend{font-size:13px;gap:14px;margin-top:14px;}
+    .cal-legend i{width:13px;height:13px;}
+  }
 
   .sum-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:11px;}
   .sum-head{display:flex;align-items:center;gap:8px;margin-bottom:11px;}
@@ -2087,6 +2114,7 @@ function renderSummary(){
   $('#vtMonth').classList.toggle('sel', isMonth);
   $('#summaryList').style.display  = isMonth ? 'none' : '';
   $('#summaryMonth').style.display = isMonth ? '' : 'none';
+  $('#page-summary').classList.toggle('wide', isMonth);   // 月表示はワイド表示
   if(isMonth){ renderSummaryMonth(); return; }
   $('#sumDayMeta').className = 'day-meta';
 
@@ -2539,7 +2567,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.10';
+const APP_VERSION = '2026-06-28.11';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
