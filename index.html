@@ -372,6 +372,22 @@
   .cal-c.shut .rt{font-size:11px;font-weight:700;color:var(--ink3);}
   .cal-c.future{background:var(--surface);}
   .cal-c.today{box-shadow:0 0 0 2px var(--orange);}
+  /* 土日祝の稼働切り替え */
+  .workday-btn{
+    margin-top:14px;padding:13px 20px;border-radius:11px;border:none;background:var(--run);
+    color:#fff;font-family:var(--sans);font-size:15px;font-weight:700;
+  }
+  .workday-btn:active{transform:scale(.97);background:var(--run-d);}
+  .workday-note{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    background:var(--pause-bg);border:1px solid #ecd7a6;border-radius:11px;
+    padding:10px 13px;margin-bottom:11px;font-size:12.5px;color:var(--pause-d);font-weight:600;
+  }
+  .workday-note b{font-weight:800;}
+  .workday-note button{
+    margin-left:auto;padding:7px 13px;border-radius:9px;border:1px solid var(--line2);
+    background:var(--surface);color:var(--ink2);font-family:var(--sans);font-size:12px;font-weight:700;
+  }
   .cal-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:11px;font-size:11.5px;color:var(--ink2);font-weight:600;}
   .cal-legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px;}
   @media (min-width:660px){
@@ -876,7 +892,7 @@
 const $ = s => document.querySelector(s);
 
 /* ===== STORE ===== */
-let store = { machines: [], records: [], coils: [], shutdowns: [] };
+let store = { machines: [], records: [], coils: [], shutdowns: [], workdays: [] };
 const KEY = 'genbaNippoData_v1';
 
 function load(){
@@ -885,6 +901,7 @@ function load(){
   if(!store.records) store.records = [];
   if(!Array.isArray(store.coils)) store.coils = [];
   if(!Array.isArray(store.shutdowns)) store.shutdowns = [];
+  if(!Array.isArray(store.workdays)) store.workdays = [];   // 土日祝でも稼働する日
   store.records.forEach(r=>{
     if(!Array.isArray(r.stops)) r.stops = [];
     if(!('lastRunEnd' in r)) r.lastRunEnd = null;
@@ -912,7 +929,7 @@ const firebaseConfig = {
   appId: "1:984544822288:web:2264697646f7b6df497695"
 };
 let db = null, fbReady = false, initialSyncDone = false;
-const firstSnap = { machines:false, records:false, coils:false, shutdowns:false };
+const firstSnap = { machines:false, records:false, coils:false, shutdowns:false, workdays:false };
 const lastSynced = {};   // "machines/<id>" | "records/<id>" -> JSON文字列（エコー再送防止）
 
 function setSyncStatus(s){
@@ -940,9 +957,10 @@ function attachListeners(){
   db.collection('records').onSnapshot(s=>applySnap('records', s), e=>{ console.warn('records listen', e); setSyncStatus('offline'); });
   db.collection('coils').onSnapshot(s=>applySnap('coils', s), e=>{ console.warn('coils listen', e); setSyncStatus('offline'); });
   db.collection('shutdowns').onSnapshot(s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
+  db.collection('workdays').onSnapshot(s=>applySnap('workdays', s), e=>{ console.warn('workdays listen', e); setSyncStatus('offline'); });
 }
 function applySnap(kind, snap){
-  const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : store.records;
+  const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : kind==='workdays' ? store.workdays : store.records;
   snap.docChanges().forEach(ch=>{
     const id = ch.doc.id, data = ch.doc.data();
     const i = arr.findIndex(x=>x.id===id);
@@ -951,7 +969,7 @@ function applySnap(kind, snap){
   });
   try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){}
   firstSnap[kind] = true;
-  if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns){ initialSyncDone = true; syncPush(); }
+  if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns && firstSnap.workdays){ initialSyncDone = true; syncPush(); }
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
 }
@@ -962,6 +980,7 @@ function syncPush(){
   store.records.forEach(r=> cur['records/'+r.id] = r);
   store.coils.forEach(c=> cur['coils/'+c.id] = c);
   store.shutdowns.forEach(sd=> cur['shutdowns/'+sd.id] = sd);
+  (store.workdays||[]).forEach(w=> cur['workdays/'+w.id] = w);
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -1421,6 +1440,76 @@ function isShutdown(dayDate, machineId){
   const dk = dateKey(dayDate);
   return (store.shutdowns||[]).find(sd => sd && sd.from && sd.to && sd.from<=dk && dk<=sd.to && (!sd.machineId || sd.machineId===machineId)) || null;
 }
+
+/* ===== 土日祝は既定で休業 ===== */
+// 春分・秋分（1980〜2099年で有効な近似式）
+function equinoxDay(y, m){
+  const base = (m===3) ? 20.8431 : 23.2488;
+  return Math.floor(base + 0.242194*(y-1980) - Math.floor((y-1980)/4));
+}
+// 国民の祝日（2020年の法改正以降のルール）
+function jpHoliday(y, m, d){
+  const nthMon = n => { const first = new Date(y, m-1, 1).getDay(); return 1 + ((1 - first + 7) % 7) + (n-1)*7; };
+  if(m===1){ if(d===1) return '元日'; if(d===nthMon(2)) return '成人の日'; }
+  if(m===2){ if(d===11) return '建国記念の日'; if(d===23) return '天皇誕生日'; }
+  if(m===3){ if(d===equinoxDay(y,3)) return '春分の日'; }
+  if(m===4){ if(d===29) return '昭和の日'; }
+  if(m===5){ if(d===3) return '憲法記念日'; if(d===4) return 'みどりの日'; if(d===5) return 'こどもの日'; }
+  if(m===7){ if(d===nthMon(3)) return '海の日'; }
+  if(m===8){ if(d===11) return '山の日'; }
+  if(m===9){ if(d===nthMon(3)) return '敬老の日'; if(d===equinoxDay(y,9)) return '秋分の日'; }
+  if(m===10){ if(d===nthMon(2)) return 'スポーツの日'; }
+  if(m===11){ if(d===3) return '文化の日'; if(d===23) return '勤労感謝の日'; }
+  return null;
+}
+// 祝日名（振替休日・国民の休日を含む）
+function holidayName(dayDate){
+  const y=dayDate.getFullYear(), m=dayDate.getMonth()+1, d=dayDate.getDate();
+  const n = jpHoliday(y,m,d);
+  if(n) return n;
+  if(dayDate.getDay()!==0){
+    // 振替休日：さかのぼって祝日が続き、その先頭が日曜なら振替
+    let p = new Date(y, m-1, d-1);
+    for(let i=0;i<7;i++){
+      if(!jpHoliday(p.getFullYear(), p.getMonth()+1, p.getDate())) break;
+      if(p.getDay()===0) return '振替休日';
+      p = new Date(p.getFullYear(), p.getMonth(), p.getDate()-1);
+    }
+    if(dayDate.getDay()!==6){
+      // 国民の休日：前後が祝日にはさまれた平日
+      const pv=new Date(y,m-1,d-1), nx=new Date(y,m-1,d+1);
+      if(jpHoliday(pv.getFullYear(),pv.getMonth()+1,pv.getDate()) && jpHoliday(nx.getFullYear(),nx.getMonth()+1,nx.getDate())) return '国民の休日';
+    }
+  }
+  return null;
+}
+// この日に実際の記録があるか（開始した記録／個数入力があれば稼働日として扱う）
+function hasDayActivity(dayDate){
+  const dk = dateKey(dayDate);
+  return store.records.some(r => dateKey(new Date(r.startTime))===dk || (r.dailyCounts||[]).some(x=>x.date===dk));
+}
+function isForcedWorkday(dayDate){
+  const dk = dateKey(dayDate);
+  return (store.workdays||[]).some(w=>w && w.id===dk);
+}
+// 土日祝の休業判定（稼働指定・実績があれば休業にしない）
+function offDay(dayDate){
+  if(isForcedWorkday(dayDate) || hasDayActivity(dayDate)) return null;
+  const h = holidayName(dayDate);
+  if(h) return { type:'holiday', label:h };
+  const wd = dayDate.getDay();
+  if(wd===0) return { type:'weekend', label:'日曜' };
+  if(wd===6) return { type:'weekend', label:'土曜' };
+  return null;
+}
+function setWorkday(dk, on){
+  store.workdays = store.workdays || [];
+  const i = store.workdays.findIndex(w=>w.id===dk);
+  if(on){ if(i<0) store.workdays.push({ id:dk, date:dk, at:new Date().toISOString() }); }
+  else if(i>=0){ store.workdays.splice(i,1); }
+  save(); processAutoDaily(); refreshActiveViews();
+  toast(on ? 'この日を稼働日にしました' : '休業に戻しました', 'success');
+}
 /* ===== 自動記録（毎日 9:00開始 / 17:00終了・1日1記録） ===== */
 function newAutoRecord(m, a, startDate, endDate){
   return {
@@ -1441,11 +1530,12 @@ function processAutoDaily(){
   const nine = new Date(today); nine.setHours(STD_START_H,0,0,0);
   const seventeen = new Date(today); seventeen.setHours(STD_END_H,0,0,0);
   const dk = dateKey(today);
+  const off = offDay(today);               // 土日祝は自動記録を作らない（稼働指定した日は作る）
   let changed = false;
   store.machines.forEach(m=>{
     const a = m.auto;
     if(!a || !a.on) return;
-    const shut = isShutdown(today, m.id);   // この機械が休止期間なら自動記録を作らない
+    const shut = isShutdown(today, m.id) || off;   // 休止期間・土日祝なら自動記録を作らない
     // 前日以前の自動記録が開いたままなら、その日の17:00で締める（個数未入力でも翌日は自動開始できるように）
     store.records.forEach(r=>{
       if(r.machineId!==m.id || r.auto!==true) return;
@@ -2075,7 +2165,12 @@ function renderSummaryMonth(){
     const dnCls = wd===0 ? ' sun' : wd===6 ? ' sat' : '';
     const isToday = d.getTime()===today.getTime();
     let cls='future', mid='<div class="rt">–</div>', sub='';
-    if(d.getTime() <= today.getTime()){
+    const off = offDay(d);
+    if(off){
+      // 土日祝（未来日も含めて休業と分かるように表示）
+      cls='shut'; mid='<div class="rt">休業</div>';
+      if(off.type==='holiday') sub='<div class="qt">祝日</div>';
+    } else if(d.getTime() <= today.getTime()){
       const a = dayAgg(d);
       if(a.allShut){ cls='shut'; mid='<div class="rt">休業</div>'; }
       else{
@@ -2132,6 +2227,24 @@ function renderSummary(){
     return;
   }
 
+  // 土日祝は既定で休業。この日だけ稼働する場合はボタンで切り替え
+  const off = offDay(d);
+  if(off){
+    const dk = dateKey(d);
+    $('#sumDayMeta').innerHTML = `<div class="dm"><div class="lab">この日は</div><div class="val">🛌 休業<small>（${esc(off.label)}）</small></div></div>`;
+    $('#summaryList').innerHTML = `<div class="empty">
+      <div class="e-ic">🛌</div>
+      <div class="e-t">${off.type==='holiday'?'祝日':'週末'}のため休業（${esc(off.label)}）</div>
+      <div class="e-t" style="font-size:12px;color:var(--ink3);font-weight:600">稼働率・平均・目標の対象外です</div>
+      <button class="workday-btn" onclick="setWorkday('${dk}',true)">▶ この日は稼働する（集計に入れる）</button>
+      <div class="e-t" style="font-size:11.5px;color:var(--ink3);font-weight:600;margin-top:8px">押すと通常の稼働日として集計され、自動記録の機械も9:00に開始します</div>
+    </div>`;
+    return;
+  }
+  // 土日祝を稼働日にしている場合の表示（解除できる）
+  const forced = isForcedWorkday(d);
+  const offBase = (holidayName(d) || d.getDay()===0 || d.getDay()===6);
+
   // day totals（休業の機械は除外）
   let totalQty = 0, totalRun = 0, totalWork = 0;
   activeMachines.forEach(m=>{
@@ -2149,7 +2262,13 @@ function renderSummary(){
     return;
   }
 
-  list.innerHTML = store.machines.map(m=>{
+  // 土日祝を稼働日として集計している旨の表示（休業に戻せる）
+  const wdBanner = offBase ? `<div class="workday-note">
+      <span>${holidayName(d)?'祝日（'+esc(holidayName(d))+'）':d.getDay()===0?'日曜':'土曜'}ですが<b>稼働日として集計中</b>${forced?'':'（記録があるため）'}</span>
+      ${forced?`<button onclick="setWorkday('${dateKey(d)}',false)">休業に戻す</button>`:''}
+    </div>` : '';
+
+  list.innerHTML = wdBanner + store.machines.map(m=>{
     const mShut = isShutdown(d, m.id);
     if(mShut){
       return `<div class="sum-card"><div class="sum-head"><span class="sid">${esc(m.id)}</span><span class="sname">${esc(m.name||'')}</span><span class="srate none">🛌 休業</span></div><div class="sum-jobs">休業${mShut.label?'（'+esc(mShut.label)+'）':''} ・ 集計対象外</div></div>`;
@@ -2567,7 +2686,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.11';
+const APP_VERSION = '2026-06-28.12';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
