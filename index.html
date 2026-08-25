@@ -70,6 +70,11 @@
   header h1{font-size:16px;font-weight:900;letter-spacing:.04em;}
   header .clock{font-family:var(--mono);font-size:12px;color:#aab4c2;font-weight:500;text-align:right;}
   header .hd-right{display:flex;align-items:center;gap:8px;}
+  /* ヘッダーの更新ボタン（画面下のバーがブラウザのツールバーで隠れる端末向け） */
+  #hdUpdate{border:none;border-radius:8px;background:#1e8a3e;color:#fff;font-family:inherit;
+    font-size:12px;font-weight:800;padding:6px 11px;flex-shrink:0;animation:updpulse 1.6s ease-in-out infinite;}
+  #hdUpdate.hidden{display:none;}
+  @keyframes updpulse{0%,100%{opacity:1}50%{opacity:.62}}
   #syncDot{width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#9aa4b0;transition:background .3s;}
   #syncDot.sync-online{background:#1e8a3e;}
   #syncDot.sync-offline{background:#9aa4b0;}
@@ -614,6 +619,7 @@
     <h1>プレス日報</h1>
   </div>
   <div class="hd-right">
+    <button id="hdUpdate" class="hidden" onclick="applyUpdate()">⬆️ 更新</button>
     <span id="syncDot" class="sync-connecting" title="接続中…"></span>
     <div class="clock" id="clock">—</div>
   </div>
@@ -2925,7 +2931,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.16';
+const APP_VERSION = '2026-06-28.17';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -2938,7 +2944,11 @@ async function checkForUpdate(){
     const r = await fetch('version.txt?cb=' + Date.now(), { cache:'no-store' });
     if(!r.ok){ showVerStatus(null, true); return; }
     const v = (await r.text()).trim();
-    if(v && v !== APP_VERSION){ updateLatest = v; const b = $('#updateBar'); if(b) b.classList.remove('hidden'); }
+    if(v && v !== APP_VERSION){
+      updateLatest = v;
+      const b = $('#updateBar'); if(b) b.classList.remove('hidden');
+      const h = $('#hdUpdate'); if(h) h.classList.remove('hidden');   // 上部にも出す（下バーが隠れる端末対策）
+    }
     showVerStatus(v, false);
   }catch(e){ showVerStatus(null, true); }
 }
