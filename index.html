@@ -968,7 +968,15 @@ function attachListeners(){
   db.collection('shutdowns').onSnapshot(s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
   db.collection('workdays').onSnapshot(s=>applySnap('workdays', s), e=>{ console.warn('workdays listen', e); setSyncStatus('offline'); });
 }
+// いま見ている機械の状態を1つの文字列にしたもの（他端末の操作を検知するのに使う）
+function machineStateKey(id){
+  const r = id ? activeFor(id) : null;
+  if(!r) return 'none';
+  const os = openStop(r);
+  return r.id + '|' + r.status + '|' + (os ? os.reason : '');
+}
 function applySnap(kind, snap){
+  const beforeKey = (kind==='records' && initialSyncDone) ? machineStateKey(selectedMachineId) : null;
   const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : kind==='workdays' ? store.workdays : store.records;
   snap.docChanges().forEach(ch=>{
     const id = ch.doc.id, data = ch.doc.data();
@@ -985,6 +993,18 @@ function applySnap(kind, snap){
   }
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
+  // 他の端末が操作したときだけ知らせる（自分の操作は先にローカル反映済みなので鳴らない）
+  if(beforeKey !== null && selectedMachineId){
+    const afterKey = machineStateKey(selectedMachineId);
+    if(beforeKey !== afterKey){
+      const r = activeFor(selectedMachineId);
+      const msg = !r ? `${selectedMachineId} は他の端末で終了されました`
+        : r.status==='running' ? `${selectedMachineId} が他の端末で再開されました`
+        : r.status==='stopped' ? `${selectedMachineId} が他の端末で停止されました`
+        : `${selectedMachineId} の状態が他の端末で変わりました`;
+      toast(msg);
+    }
+  }
 }
 function syncPush(){
   if(!fbReady || !db) return;
@@ -1307,7 +1327,7 @@ function renderStatus(){
 }
 
 function manualResume(){
-  const r = selectedMachineId ? overnightFor(selectedMachineId) : null;
+  const r = shownWith('overnight');
   if(!r) return;
   r.status = 'running';
   r.sessionStart = new Date().toISOString();
@@ -1322,10 +1342,18 @@ function manualResume(){
 
 /* live timer (running → today's session, stopped → current stop) */
 let timerInt = null;
-let statusRecId = null;   // いま画面に出している記録のid（タイマーが別の記録を見ないように）
+let statusRecId = null;   // いま画面に出している記録のid
+// 画面に出ている記録。停止・再開・終了・回転数はすべてこの記録に対して行う
+// （有効な記録が複数あるとき、見えていない別の記録を操作してしまうのを防ぐ）
+function shownRec(){
+  if(statusRecId){ const r = store.records.find(x=>x.id===statusRecId); if(r) return r; }
+  return selectedMachineId ? activeFor(selectedMachineId) : null;
+}
+// 画面に出ている記録が指定の状態のときだけ返す（状態が変わっていたら操作させない）
+function shownWith(status){ const r = shownRec(); return (r && r.status===status) ? r : null; }
+function shownRunning(){ return shownWith('running'); }
 function timerFrom(){
-  const r = statusRecId ? store.records.find(x=>x.id===statusRecId)
-          : (selectedMachineId ? activeFor(selectedMachineId) : null);
+  const r = shownRec();
   if(!r) return null;
   if(r.status==='stopped'){ const os = openStop(r); return os ? os.from : r.sessionStart; }
   if(r.status==='running'){ return r.sessionStart || r.startTime; }
@@ -1384,8 +1412,24 @@ function selStopChip(el){
   document.querySelectorAll('#stopChips .chip').forEach(c=>c.classList.remove('sel'));
   el.classList.add('sel');
 }
+// コイル在庫を1減らす。2台以上が同時にコイル交換しても減算が失われないよう、
+// Firestore側は「現在値から1引く」命令（increment）で更新する。
+function decCoilStock(coilId){
+  const c = store.coils.find(x=>x.id===coilId);
+  if(!c) return null;
+  c.stock = (c.stock||0) - 1;                       // 画面用に即時反映
+  if(fbReady && db && window.firebase){
+    try{
+      db.collection('coils').doc(coilId)
+        .update({ stock: firebase.firestore.FieldValue.increment(-1) })
+        .catch(e=>console.warn('coil dec', e));
+      lastSynced['coils/'+coilId] = JSON.stringify(c);  // 直後のsyncPushで丸ごと上書きしない
+    }catch(e){ console.warn('coil dec', e); }
+  }
+  return c;
+}
 function openStopSheet(){
-  const run = selectedMachineId ? runningFor(selectedMachineId) : null;
+  const run = shownRunning();
   if(!run) return;
   document.querySelectorAll('#stopChips .chip').forEach(c=>c.classList.remove('sel'));
   $('#stopDetail').value = '';
@@ -1393,7 +1437,7 @@ function openStopSheet(){
 }
 function closeStopSheet(){ $('#stopSheet').classList.remove('active'); }
 function confirmStop(){
-  const run = selectedMachineId ? runningFor(selectedMachineId) : null;
+  const run = shownRunning();
   if(!run){ closeStopSheet(); return; }
   const chip = document.querySelector('#stopChips .chip.sel');
   if(!chip){ toast('停止の理由を選んでください','error'); return; }
@@ -1402,9 +1446,8 @@ function confirmStop(){
   run.status = 'stopped';
   let stockMsg = '';
   if(reason === 'コイル交換'){
-    const c = store.coils.find(x=>x.id===run.coilId);
-    if(c){ c.stock = (c.stock||0) - 1; stockMsg = `（${c.name} 残${c.stock}）`; }
-    else { stockMsg = '（コイル未選択：在庫変動なし）'; }
+    const c = decCoilStock(run.coilId);
+    stockMsg = c ? `（${c.name} 残${c.stock}）` : '（コイル未選択：在庫変動なし）';
   }
   save();
   closeStopSheet();
@@ -1414,7 +1457,7 @@ function confirmStop(){
   renderCoilSelect();
 }
 function resumeJob(){
-  const r = selectedMachineId ? stoppedFor(selectedMachineId) : null;
+  const r = shownWith('stopped');
   if(!r) return;
   const os = openStop(r);
   if(os) os.to = new Date().toISOString();
@@ -1691,6 +1734,14 @@ function refreshActiveViews(){
   renderMachineGrid();
   renderStatus();
   renderCoilSelect();
+  renderRpm();   // 他端末で変えた回転数もリアルタイム反映（入力中の欄は上書きしない）
+  // 他端末の操作でシートの前提が崩れたら閉じて知らせる（古い状態のまま保存させない）
+  if($('#stopSheet').classList.contains('active') && !shownRunning()){
+    closeStopSheet(); toast('他の端末で操作されたため、停止の入力を取り消しました','error');
+  }
+  if($('#endSheet').classList.contains('active') && !shownRec()){
+    closeEndSheet(); toast('他の端末で作業が終了されました','error');
+  }
   if($('#page-summary').classList.contains('active')) renderSummary();
   if($('#page-records').classList.contains('active')) renderRecords();
   if($('#page-settings').classList.contains('active')){
@@ -1745,7 +1796,7 @@ function tickBoundaries(){
 }
 
 function openEndSheet(){
-  const r = selectedMachineId ? activeFor(selectedMachineId) : null;
+  const r = shownRec();
   if(!r) return;
   const stMin = totalStopMin(r);
   const prior = (r.dailyCounts||[]).reduce((s,d)=>s+(d.qty||0),0);
@@ -1763,7 +1814,7 @@ function openEndSheet(){
 }
 function closeEndSheet(){ $('#endSheet').classList.remove('active'); }
 function confirmEnd(){
-  const r = selectedMachineId ? activeFor(selectedMachineId) : null;
+  const r = shownRec();
   if(!r) { closeEndSheet(); return; }
   const qv = $('#endQty').value;
   if(qv==='' || isNaN(parseInt(qv))){ toast('生産個数を入力してください','error'); return; }
@@ -2575,13 +2626,17 @@ function onCoilSelect(){
   if(active){ active.coilId = selectedCoilId; save(); }
 }
 function renderRpm(){
-  const a = selectedMachineId ? activeFor(selectedMachineId) : null;
+  const a = shownRec();
   const spmEl=$('#spmInput'), sppEl=$('#sppInput');
   if(!spmEl||!sppEl) return;
-  if(a){ spmEl.value = a.spm||''; sppEl.value = a.spp||''; }
+  if(a){
+    // 自分が入力中の欄は上書きしない（他端末からの反映で数字が消えるのを防ぐ）
+    if(document.activeElement!==spmEl) spmEl.value = a.spm||'';
+    if(document.activeElement!==sppEl) sppEl.value = a.spp||'';
+  }
 }
 function onRpmInput(){
-  const a = selectedMachineId ? activeFor(selectedMachineId) : null;
+  const a = shownRec();
   if(a){ a.spm = parseInt($('#spmInput').value)||null; a.spp = parseInt($('#sppInput').value)||null; save(); }
 }
 function renderCoilSettings(){
@@ -2738,7 +2793,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.13';
+const APP_VERSION = '2026-06-28.14';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
