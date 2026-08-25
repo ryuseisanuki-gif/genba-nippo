@@ -384,6 +384,12 @@
     padding:10px 13px;margin-bottom:11px;font-size:12.5px;color:var(--pause-d);font-weight:600;
   }
   .workday-note b{font-weight:800;}
+  .load-older{
+    display:block;width:100%;margin:6px 0 4px;padding:13px;border-radius:11px;
+    border:1px dashed var(--line2);background:var(--surface);color:var(--ink2);
+    font-family:var(--sans);font-size:13px;font-weight:700;
+  }
+  .load-older:active{background:var(--surface2);}
   .workday-note button{
     margin-left:auto;padding:7px 13px;border-radius:9px;border:1px solid var(--line2);
     background:var(--surface);color:var(--ink2);font-family:var(--sans);font-size:12px;font-weight:700;
@@ -946,6 +952,65 @@ function setSyncStatus(s){
 }
 function splitKey(k){ const i = k.indexOf('/'); return [k.slice(0,i), k.slice(i+1)]; }
 
+/* ===== 記録を軽く保つ（直近だけ常時読み込み、古い分は必要な時だけ取得） ===== */
+const RECENT_DAYS = 120;                 // 常時読み込む期間
+let recentOnly = true;                   // 直近だけ読み込むモード
+let recentFallbackDone = false;
+const archiveIds = new Set();            // 古いのに読み込んだ記録（勝手に捨てない目印）
+const loadedRanges = [];                 // 追加取得済みの期間 [{from,to}]
+let loadingArchive = false;
+function recentCutoff(){ const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-RECENT_DAYS); return d; }
+function recentCutoffIso(){ return recentCutoff().toISOString(); }
+function rangeLoaded(fromKey, toKey){
+  if(!recentOnly) return true;
+  if(fromKey >= dateKey(recentCutoff())) return true;              // 直近の窓に入っている
+  return loadedRanges.some(r=> r.from<=fromKey && toKey<=r.to);
+}
+// 指定期間の古い記録をサーバーから取得して合流させる（常時監視はしない＝軽いまま）
+async function loadRecordsRange(fromKey, toKey){
+  if(!db || !fbReady) return false;
+  if(rangeLoaded(fromKey, toKey)) return false;
+  if(loadingArchive) return false;
+  loadingArchive = true;
+  try{
+    const [fy,fm,fd] = fromKey.split('-').map(Number);
+    const [ty,tm,td] = toKey.split('-').map(Number);
+    const from = new Date(fy,fm-1,fd); from.setHours(0,0,0,0);
+    const to   = new Date(ty,tm-1,td); to.setHours(0,0,0,0); to.setDate(to.getDate()+1);
+    const snap = await db.collection('records')
+      .where('startTime','>=', from.toISOString())
+      .where('startTime','<',  to.toISOString()).get();
+    let added = 0;
+    snap.forEach(doc=>{
+      const data = doc.data();
+      archiveIds.add(doc.id);
+      const i = store.records.findIndex(x=>x.id===doc.id);
+      if(i>=0) store.records[i] = data; else { store.records.push(data); added++; }
+      lastSynced['records/'+doc.id] = JSON.stringify(data);   // 読み込んだだけなので送り返さない
+    });
+    loadedRanges.push({ from:fromKey, to:toKey });
+    if(added) refreshActiveViews();
+    return true;
+  }catch(e){ console.warn('loadRecordsRange', e); return false; }
+  finally{ loadingArchive = false; }
+}
+// 起動時に localStorage に溜まった古い記録を外してメモリと保存を軽くする
+// （サーバーへの送信が済んだ後に呼ぶこと。サーバー側の記録は消さない）
+function pruneOldRecords(){
+  if(!recentOnly) return false;
+  const cut = dateKey(recentCutoff());
+  const before = store.records.length;
+  store.records = store.records.filter(r=>{
+    if(archiveIds.has(r.id)) return true;
+    if(r.status==='running'||r.status==='stopped'||r.status==='overnight') return true;
+    const k = dateKey(new Date(r.startTime));
+    if(k >= cut) return true;
+    delete lastSynced['records/'+r.id];   // 消したのではなく手放しただけ（delDocは呼ばない）
+    return false;
+  });
+  return store.records.length !== before;
+}
+
 function initSync(){
   if(!window.firebase || !firebaseConfig.apiKey){ setSyncStatus('offline'); enableAutoCreate(); return; }
   try{
@@ -963,7 +1028,18 @@ function initSync(){
 }
 function attachListeners(){
   db.collection('machines').onSnapshot(s=>applySnap('machines', s), e=>{ console.warn('machines listen', e); setSyncStatus('offline'); });
-  db.collection('records').onSnapshot(s=>applySnap('records', s), e=>{ console.warn('records listen', e); setSyncStatus('offline'); });
+  // 記録は「直近 RECENT_DAYS 日」だけ常時監視する（何年分あっても起動が重くならない）。
+  // それより古い記録はサーバーに残り、集計や記録タブで必要になった時だけ読み込む。
+  db.collection('records').where('startTime','>=', recentCutoffIso())
+    .onSnapshot(s=>applySnap('records', s), e=>{
+      console.warn('records listen', e); setSyncStatus('offline');
+      // 万一クエリが使えない環境では全件監視に切り替える（動作優先）
+      if(!recentFallbackDone){ recentFallbackDone = true; recentOnly = false;
+        db.collection('records').onSnapshot(s2=>applySnap('records', s2), e2=>console.warn('records listen(all)', e2)); }
+    });
+  // 直近の窓から外れていても「作業中／持ち越し」の記録は必ず読む（機械が空きに見えるのを防ぐ）
+  db.collection('records').where('status','in',['running','stopped','overnight'])
+    .onSnapshot(s=>applySnap('records', s), e=>console.warn('active listen', e));
   db.collection('coils').onSnapshot(s=>applySnap('coils', s), e=>{ console.warn('coils listen', e); setSyncStatus('offline'); });
   db.collection('shutdowns').onSnapshot(s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
   db.collection('workdays').onSnapshot(s=>applySnap('workdays', s), e=>{ console.warn('workdays listen', e); setSyncStatus('offline'); });
@@ -989,7 +1065,8 @@ function applySnap(kind, snap){
   if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns && firstSnap.workdays){
     initialSyncDone = true;
     enableAutoCreate();   // 全端末のデータが揃ってから自動記録を作る（二重作成の防止）
-    syncPush();
+    syncPush();           // 先に未送信ぶんをサーバーへ送り切る
+    if(pruneOldRecords()){ try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){} }  // その後で古い分を手放す
   }
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
@@ -1023,14 +1100,13 @@ function syncPush(){
       lastSynced[k] = js;
     }
   });
-  // 削除（同期済みのものだけ）
-  Object.keys(lastSynced).forEach(k=>{
-    if(!(k in cur)){
-      const [c,id] = splitKey(k);
-      db.collection(c).doc(id).delete().catch(e=>console.warn('del', k, e));
-      delete lastSynced[k];
-    }
-  });
+  // 削除は「消えていたら消す」ではなく delDoc() で明示的に行う。
+  // （古い記録をメモリから外して軽くする仕組みと両立させるため。推測で消すとサーバーの記録まで消える）
+}
+// 実際に削除する時だけ呼ぶ（ユーザー操作・重複掃除）
+function delDoc(kind, id){
+  delete lastSynced[kind+'/'+id];
+  if(fbReady && db) db.collection(kind).doc(id).delete().catch(e=>console.warn('del', kind, id, e));
 }
 
 /* ===== STATE ===== */
@@ -1575,7 +1651,7 @@ function setWorkday(dk, on){
   store.workdays = store.workdays || [];
   const i = store.workdays.findIndex(w=>w.id===dk);
   if(on){ if(i<0) store.workdays.push({ id:dk, date:dk, at:new Date().toISOString() }); }
-  else if(i>=0){ store.workdays.splice(i,1); }
+  else if(i>=0){ store.workdays.splice(i,1); delDoc('workdays', dk); }
   save(); processAutoDaily(); refreshActiveViews();
   toast(on ? 'この日を稼働日にしました' : '休業に戻しました', 'success');
 }
@@ -1616,6 +1692,7 @@ function dedupeAutoRecords(){
   });
   if(!drop.length) return false;
   store.records = store.records.filter(r=> !drop.includes(r.id));
+  drop.forEach(id=> delDoc('records', id));
   return true;
 }
 function processAutoDaily(){
@@ -2008,7 +2085,7 @@ function renderRecords(){
   const sortMode = ($('#recSort') && $('#recSort').value) || 'machine';
   if(sortMode==='date'){
     recs.sort((a,b)=> new Date(b.startTime)-new Date(a.startTime));   // 新しい日付が上
-    list.innerHTML = recs.map(recCard).join('');
+    list.innerHTML = recs.map(recCard).join('') + olderRecordsBtn();
     return;
   }
 
@@ -2032,7 +2109,29 @@ function renderRecords(){
       </div>
       ${items.map(recCard).join('')}
     </div>`;
-  }).join('');
+  }).join('') + olderRecordsBtn();
+}
+// 直近ぶんだけ読み込んでいるので、さらに古い記録を読むボタンを出す
+function olderRecordsBtn(){
+  if(!recentOnly || !fbReady) return '';
+  const from = loadedFromKey();
+  return `<button class="load-older" onclick="loadOlderRecords()">${loadingArchive?'読み込み中…':'⌛ さらに古い記録を読み込む（'+from.replace(/-/g,'/')+' より前）'}</button>`;
+}
+function loadedFromKey(){
+  let f = dateKey(recentCutoff());
+  loadedRanges.forEach(r=>{ if(r.from < f) f = r.from; });
+  return f;
+}
+async function loadOlderRecords(){
+  const f = loadedFromKey();
+  const [y,m,d] = f.split('-').map(Number);
+  const to = new Date(y,m-1,d); to.setDate(to.getDate()-1);            // 読み込み済みの1日前まで
+  const from = new Date(y,m-1,d); from.setDate(from.getDate()-180);    // さらに180日ぶん
+  renderRecords();
+  const ok = await loadRecordsRange(dateKey(from), dateKey(to));
+  loadedRanges.push({ from:dateKey(from), to:dateKey(to) });
+  renderRecords();
+  toast(ok ? 'さらに古い記録を読み込みました' : 'これ以上の記録はありません');
 }
 function recCard(r){
   const running = r.status==='running';
@@ -2091,6 +2190,7 @@ async function deleteRecord(id){
   const ok = await confirmDialog('記録の削除','この日報記録を削除します。よろしいですか？','削除する',true);
   if(!ok) return;
   store.records = store.records.filter(r=>r.id!==id);
+  delDoc('records', id);
   save(); renderRecords(); toast('削除しました');
 }
 
@@ -2251,6 +2351,12 @@ function dayAgg(d){
   return { qty, run, work, recs, allShut, rate: work>0 ? Math.round(run/work*100) : null };
 }
 /* 月カレンダー：日付タップで日別詳細へ */
+// 集計で古い期間を開いたら、その期間の記録をサーバーから読み込む
+function ensureRangeForSummary(fromDate, toDate){
+  const f = dateKey(fromDate), t = dateKey(toDate);
+  if(rangeLoaded(f, t)) return;
+  loadRecordsRange(f, t).then(ok=>{ if(ok) renderSummary(); });
+}
 function renderSummaryMonth(){
   const y = summaryDate.getFullYear(), mo = summaryDate.getMonth();
   const today = new Date(); today.setHours(0,0,0,0);
@@ -2259,6 +2365,7 @@ function renderSummaryMonth(){
 
   const firstWd = new Date(y, mo, 1).getDay();
   const lastDate = new Date(y, mo+1, 0).getDate();
+  ensureRangeForSummary(new Date(y,mo,1), new Date(y,mo,lastDate));   // 古い月なら記録を取りに行く
   let mQty=0, mRun=0, mWork=0, mDays=0;
   const cells = [];
   for(let i=0;i<firstWd;i++) cells.push('<div class="cal-c blank"></div>');
@@ -2317,6 +2424,7 @@ function renderSummary(){
   $('#sumDayMeta').className = 'day-meta';
 
   const d = summaryDate;
+  ensureRangeForSummary(d, d);   // 古い日付なら記録を取りに行く（読み込めたら再描画）
   const today = new Date(); today.setHours(0,0,0,0);
   const isToday = d.getTime() === today.getTime();
   $('#sumDateLabel').textContent = fmtDate(d) + (isToday ? '（今日）' : '');
@@ -2604,6 +2712,7 @@ async function deleteMachine(id){
   const ok = await confirmDialog('機械の削除',`${id} を一覧から削除します。記録は残ります。`,'削除する',true);
   if(!ok) return;
   store.machines = store.machines.filter(m=>m.id!==id);
+  delDoc('machines', id);
   if(selectedMachineId===id) selectedMachineId=null;
   save(); renderMachineSettings(); renderMachineGrid(); renderStatus();
   toast('削除しました');
@@ -2676,6 +2785,7 @@ async function deleteShutdown(id){
   const ok=await confirmDialog('休止期間の削除','この休止期間を削除します。','削除する',true);
   if(!ok) return;
   store.shutdowns=(store.shutdowns||[]).filter(s=>s.id!==id);
+  delDoc('shutdowns', id);
   save(); renderShutdownSettings(); refreshActiveViews();
   toast('削除しました');
 }
@@ -2753,6 +2863,7 @@ async function deleteCoil(id){
   const ok = await confirmDialog('コイルの削除', `${c?c.name:''} を削除します。`, '削除する', true);
   if(!ok) return;
   store.coils = store.coils.filter(x=>x.id!==id);
+  delDoc('coils', id);
   if(selectedCoilId===id) selectedCoilId=null;
   save(); renderCoilSettings(); renderCoilSelect();
   toast('削除しました');
@@ -2761,6 +2872,7 @@ async function clearRecords(){
   if(!store.records.length){ toast('記録がありません'); return; }
   const ok = await confirmDialog('記録の全削除',`記録 ${store.records.length}件 をすべて削除します。この操作は元に戻せません。`,'すべて削除',true);
   if(!ok) return;
+  store.records.forEach(r=> delDoc('records', r.id));
   store.records = [];
   save(); renderRecords(); renderMachineGrid(); renderStatus();
   toast('記録を削除しました');
@@ -2793,7 +2905,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.14';
+const APP_VERSION = '2026-06-28.15';
 let updateLatest = null;
 async function checkForUpdate(){
   try{
