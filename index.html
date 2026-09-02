@@ -810,6 +810,7 @@
     <p>停止の理由を選んでください。直ったら「再開」できます。</p>
     <div class="chip-grid" id="stopChips">
       <button class="chip" onclick="selStopChip(this)">材料切れ</button>
+      <button class="chip" onclick="selStopChip(this)">金型交換</button>
       <button class="chip" onclick="selStopChip(this)">金型不具合</button>
       <button class="chip" onclick="selStopChip(this)">設備故障</button>
       <button class="chip" onclick="selStopChip(this)">品質不良</button>
@@ -864,6 +865,7 @@
     <div class="chip-grid" id="addStopChips">
       <button class="chip" onclick="selAddStopChip(this)">コイル交換</button>
       <button class="chip" onclick="selAddStopChip(this)">材料切れ</button>
+      <button class="chip" onclick="selAddStopChip(this)">金型交換</button>
       <button class="chip" onclick="selAddStopChip(this)">金型不具合</button>
       <button class="chip" onclick="selAddStopChip(this)">設備故障</button>
       <button class="chip" onclick="selAddStopChip(this)">品質不良</button>
@@ -2931,7 +2933,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.17';
+const APP_VERSION = '2026-06-28.18';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
