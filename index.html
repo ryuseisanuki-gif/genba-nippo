@@ -657,6 +657,10 @@
         <input type="file" accept="image/*" capture="environment" id="barcodePhoto" onchange="decodePhoto(event)" style="display:none">
       </label>
       <div class="coil-row">
+        <span class="coil-lab">📄 過去の品番</span>
+        <select id="partHistory" class="coil-select" onchange="onPartHistory()"></select>
+      </div>
+      <div class="coil-row">
         <span class="coil-lab">🧵 コイル</span>
         <select id="coilSelect" class="coil-select" onchange="onCoilSelect()"></select>
       </div>
@@ -1275,6 +1279,7 @@ function selectMachine(id){
   renderMachineGrid();
   renderStatus();
   renderCoilSelect();
+  renderPartHistory();   // 品番履歴は機械ごとなので切り替える
   renderRpm();
 }
 
@@ -1314,6 +1319,39 @@ function renderScanned(){
   const box = $('#scannedBox');
   if(!box) return;
   if(document.activeElement !== box) box.value = scan.partNo || ''; // 入力中は上書きしない
+  renderPartHistory();
+}
+/* 過去に使った品番を選べるようにする（選んだ機械のぶんだけ・新しい順） */
+function partHistoryFor(machineId){
+  if(!machineId) return [];
+  const seen = new Map();   // 品番 -> 最後に使った日時
+  store.records.forEach(r=>{
+    if(r.machineId !== machineId) return;
+    const p = (r.partNo||'').trim();
+    if(!p) return;
+    const t = new Date(r.startTime).getTime();
+    if(!seen.has(p) || seen.get(p) < t) seen.set(p, t);
+  });
+  return [...seen.entries()].sort((a,b)=> b[1]-a[1]).map(([p,t])=>({ partNo:p, at:t }));
+}
+function renderPartHistory(){
+  const sel = $('#partHistory'); if(!sel) return;
+  const list = partHistoryFor(selectedMachineId);
+  const cur = scan.partNo || '';
+  sel.innerHTML = list.length
+    ? '<option value="">（過去の品番から選ぶ）</option>' +
+      list.map(x=>`<option value="${esc(x.partNo)}">${esc(x.partNo)}　${fmtMD(x.at)}</option>`).join('')
+    : `<option value="">${selectedMachineId ? 'この機械の過去の品番はまだありません' : '先に機械を選んでください'}</option>`;
+  sel.value = [...sel.options].some(o=>o.value===cur) ? cur : '';
+}
+function fmtMD(t){ const d=new Date(t); return `${d.getMonth()+1}/${d.getDate()}`; }
+function onPartHistory(){
+  const v = $('#partHistory').value;
+  if(!v) return;
+  scan = { raw:v, partNo:v, partName:'', qty:'', due:'' };
+  $('#scannedBox').value = v;
+  renderScanned(); renderStatus();
+  toast('品番 ' + v + ' を入力しました');
 }
 $('#scannedBox').addEventListener('input', e=>{
   const v = e.target.value;
@@ -1839,6 +1877,7 @@ function refreshActiveViews(){
   renderMachineGrid();
   renderStatus();
   renderCoilSelect();
+  renderPartHistory();   // 機械ごとの品番履歴（他端末で増えた品番も反映）
   renderRpm();   // 他端末で変えた回転数もリアルタイム反映（入力中の欄は上書きしない）
   // 他端末の操作でシートの前提が崩れたら閉じて知らせる（古い状態のまま保存させない）
   if($('#stopSheet').classList.contains('active') && !shownRunning()){
@@ -2933,7 +2972,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.18';
+const APP_VERSION = '2026-06-28.19';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
