@@ -1787,9 +1787,14 @@ function setWorkday(dk, on){
   toast(on ? 'この日を稼働日にしました' : '休業に戻しました', 'success');
 }
 /* ===== 自動記録（毎日 9:00開始 / 17:00終了・1日1記録） ===== */
+// 自動記録のIDは「機械＋日付」から必ず同じ文字列になるようにする。
+// こうすると2台が同時に作っても同じ1件になり、重複が構造的に発生しない。
+function autoRecId(machineId, dayDate){
+  return 'auto_' + String(machineId).replace(/[^A-Za-z0-9_-]/g,'') + '_' + dateKey(dayDate);
+}
 function newAutoRecord(m, a, startDate, endDate){
   return {
-    id: uid(), machineId: m.id, auto: true,
+    id: autoRecId(m.id, startDate), machineId: m.id, auto: true,
     partNo: a.partNo||'', partName:'', rawScan: a.partNo||'',
     indicatedQty:'', due:'',
     startTime: startDate.toISOString(), sessionStart: startDate.toISOString(),
@@ -1825,6 +1830,12 @@ function dedupeAutoRecords(){
   store.records = store.records.filter(r=> !drop.includes(r.id));
   drop.forEach(id=> delDoc('records', id));
   return true;
+}
+// 自動記録を新しく作ってよいか（同期未完了・休業・既に作業中・同じIDが既にある場合は作らない）
+function canMakeAuto(m, todays, shut){
+  if(!autoCreateReady || shut || todays.length>0 || activeFor(m.id)) return false;
+  const today = new Date(); today.setHours(0,0,0,0);
+  return !store.records.some(r=> r.id === autoRecId(m.id, today));
 }
 function processAutoDaily(){
   const now = Date.now();
@@ -1864,10 +1875,10 @@ function processAutoDaily(){
         }
       });
       // 今日ぶんが未作成（日中アプリ未起動）→ 9:00-17:00の記録を作って完了にする
-      if(autoCreateReady && !shut && todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, seventeen)); changed = true; }
+      if(canMakeAuto(m, todays, shut)){ store.records.push(newAutoRecord(m, a, nine, seventeen)); changed = true; }
     } else if(now >= nine.getTime()){
       // 9:00〜17:00：今日ぶんが無ければ自動開始（初回同期が終わるまでは作らない）
-      if(autoCreateReady && !shut && todays.length===0 && !activeFor(m.id)){ store.records.push(newAutoRecord(m, a, nine, null)); changed = true; }
+      if(canMakeAuto(m, todays, shut)){ store.records.push(newAutoRecord(m, a, nine, null)); changed = true; }
     }
   });
   if(changed) save();
@@ -3080,7 +3091,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.21';
+const APP_VERSION = '2026-06-28.22';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
