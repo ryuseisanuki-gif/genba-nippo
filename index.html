@@ -399,6 +399,38 @@
     padding:10px 13px;margin-bottom:11px;font-size:12.5px;color:var(--pause-d);font-weight:600;
   }
   .workday-note b{font-weight:800;}
+  /* 記録タブ：絞り込みチップ */
+  .rec-chips{display:flex;gap:6px;margin-bottom:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
+  .rec-chips::-webkit-scrollbar{display:none;}
+  .rchip{
+    flex:0 0 auto;padding:9px 14px;border-radius:999px;border:1.5px solid var(--line2);
+    background:var(--surface);color:var(--ink2);font-family:var(--sans);font-size:13px;font-weight:700;white-space:nowrap;
+  }
+  .rchip.sel{background:var(--ink);border-color:var(--ink);color:#fff;}
+  .rchip:active{transform:scale(.97);}
+  .rchip .n{opacity:.7;font-size:11px;margin-left:4px;}
+  #recMissingBtn.sel{background:var(--stop);border-color:var(--stop);color:#fff;}
+  /* 記録タブ：1行一覧 */
+  .rrow{
+    display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+    background:var(--surface);border:1px solid var(--line);border-radius:10px;
+    padding:10px 11px;margin-bottom:5px;font-family:var(--sans);
+  }
+  .rrow:active{background:var(--surface2);}
+  .rrow .rr-date{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--ink2);flex:0 0 62px;}
+  .rrow .rr-mach{font-family:var(--mono);font-size:12px;font-weight:800;color:var(--ink);
+    background:var(--surface2);border-radius:6px;padding:2px 6px;flex:0 0 auto;}
+  .rrow .rr-part{flex:1;min-width:0;font-size:12.5px;color:var(--ink2);font-weight:600;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .rrow .rr-qty{font-family:var(--mono);font-size:13px;font-weight:800;color:var(--orange-d);flex:0 0 auto;}
+  .rrow .rr-qty.missing{color:var(--stop-d);}
+  .rrow .rr-st{font-size:10.5px;font-weight:800;border-radius:5px;padding:2px 5px;flex:0 0 auto;}
+  .rrow .rr-st.run{background:var(--run-bg);color:var(--run-d);}
+  .rrow .rr-st.paused{background:var(--pause-bg);color:var(--pause-d);}
+  .rrow .rr-st.over{background:#e8ecf7;color:#384a8f;}
+  .rrow .rr-ar{color:var(--ink3);font-size:12px;flex:0 0 auto;}
+  .rec-daygroup{font-size:11.5px;font-weight:800;color:var(--ink3);margin:12px 2px 5px;}
+  .rec-empty-note{font-size:12.5px;color:var(--ink3);font-weight:600;text-align:center;padding:18px 8px;}
   .load-older{
     display:block;width:100%;margin:6px 0 4px;padding:13px;border-radius:11px;
     border:1px dashed var(--line2);background:var(--surface);color:var(--ink2);
@@ -683,12 +715,19 @@
 
 <!-- ===== RECORDS ===== -->
 <section class="page" id="page-records">
+  <div class="rec-chips" id="recPeriodChips">
+    <button class="rchip" data-period="week" onclick="setRecPeriod('week')">今週</button>
+    <button class="rchip sel" data-period="month" onclick="setRecPeriod('month')">今月</button>
+    <button class="rchip" data-period="prev" onclick="setRecPeriod('prev')">先月</button>
+    <button class="rchip" data-period="all" onclick="setRecPeriod('all')">全期間</button>
+  </div>
+  <div class="rec-chips" id="recMachineChips"></div>
   <div class="rec-bar">
-    <select class="rec-filter" id="recFilter" onchange="renderRecords()"></select>
     <select class="rec-filter" id="recSort" onchange="renderRecords()">
-      <option value="machine">機械ごと（日付順）</option>
       <option value="date">日付順（全機械）</option>
+      <option value="machine">機械ごと（日付順）</option>
     </select>
+    <button class="rchip" id="recMissingBtn" onclick="toggleRecMissing()">個数未入力のみ</button>
     <button class="btn-out" onclick="exportCSV()">⬇ CSV</button>
     <button class="btn-out" onclick="exportJSON()">⬇ バックアップ</button>
   </div>
@@ -2158,51 +2197,94 @@ function closeScanner(){
 }
 
 /* ===== RECORDS ===== */
-function renderRecords(){
-  const filterSel = $('#recFilter');
-  const cur = filterSel.value || 'all';
-  filterSel.innerHTML = '<option value="all">すべての機械</option>' +
-    store.machines.map(m=>`<option value="${esc(m.id)}">${esc(m.id)}</option>`).join('');
-  filterSel.value = [...filterSel.options].some(o=>o.value===cur) ? cur : 'all';
-  const filter = filterSel.value;
+let recPeriod = 'month';        // week | month | prev | all
+let recMachine = 'all';
+let recMissingOnly = false;
+const recOpen = new Set();      // 展開中の記録id
 
-  const list = $('#recordsList');
-  let recs = store.records.slice();
-  if(filter!=='all') recs = recs.filter(r=>r.machineId===filter);
+function setRecPeriod(p){ recPeriod = p; renderRecords(); }
+function setRecMachine(id){ recMachine = id; renderRecords(); }
+function toggleRecMissing(){ recMissingOnly = !recMissingOnly; renderRecords(); }
+function toggleRecRow(id){ if(recOpen.has(id)) recOpen.delete(id); else recOpen.add(id); renderRecords(); }
+
+// 期間の範囲（from/to は日付キー。null は無制限）
+function recRange(){
+  const t = new Date(); t.setHours(0,0,0,0);
+  if(recPeriod==='week'){ const s=new Date(t); s.setDate(s.getDate()-((s.getDay()+6)%7)); return {from:dateKey(s), to:null}; }  // 月曜始まり
+  if(recPeriod==='month'){ return {from:dateKey(new Date(t.getFullYear(),t.getMonth(),1)), to:null}; }
+  if(recPeriod==='prev'){
+    const s=new Date(t.getFullYear(),t.getMonth()-1,1), e=new Date(t.getFullYear(),t.getMonth(),0);
+    return {from:dateKey(s), to:dateKey(e)};
+  }
+  return {from:null, to:null};
+}
+function recMissingQty(r){ return r.status==='done' && (r.dailyCounts||[]).length<=1 && !(recordTotalQty(r)>0); }
+
+function renderRecords(){
+  const list = $('#recordsList'); if(!list) return;
+  document.querySelectorAll('#recPeriodChips .rchip').forEach(c=> c.classList.toggle('sel', c.dataset.period===recPeriod));
+  const mb = $('#recMissingBtn'); if(mb) mb.classList.toggle('sel', recMissingOnly);
+
+  const {from,to} = recRange();
+  const inRange = r => { const k = dateKey(new Date(r.startTime)); return (!from || k>=from) && (!to || k<=to); };
+  const base = store.records.filter(inRange);
+
+  // 機械チップ（件数つき）
+  const chips = $('#recMachineChips');
+  if(chips){
+    const cnt = id => base.filter(r=>r.machineId===id).length;
+    chips.innerHTML = `<button class="rchip ${recMachine==='all'?'sel':''}" onclick="setRecMachine('all')">全部<span class="n">${base.length}</span></button>` +
+      store.machines.map(m=>`<button class="rchip ${recMachine===m.id?'sel':''}" onclick="setRecMachine('${esc(m.id)}')">${esc(m.id)}<span class="n">${cnt(m.id)}</span></button>`).join('');
+  }
+
+  let recs = base.slice();
+  if(recMachine!=='all') recs = recs.filter(r=>r.machineId===recMachine);
+  const missingCount = recs.filter(recMissingQty).length;
+  if(mb) mb.innerHTML = `個数未入力のみ${missingCount?`<span class="n">${missingCount}</span>`:''}`;
+  if(recMissingOnly) recs = recs.filter(recMissingQty);
 
   if(!recs.length){
-    list.innerHTML = '<div class="empty"><div class="e-ic">📋</div><div class="e-t">まだ記録がありません</div></div>';
+    list.innerHTML = `<div class="rec-empty-note">${recMissingOnly?'個数未入力の記録はありません':'この期間の記録はありません'}</div>` + olderRecordsBtn();
     return;
   }
 
-  const sortMode = ($('#recSort') && $('#recSort').value) || 'machine';
-  if(sortMode==='date'){
-    recs.sort((a,b)=> new Date(b.startTime)-new Date(a.startTime));   // 新しい日付が上
-    list.innerHTML = recs.map(recCard).join('') + olderRecordsBtn();
+  const sortMode = ($('#recSort') && $('#recSort').value) || 'date';
+  if(sortMode==='machine'){
+    const order = store.machines.map(m=>m.id);
+    const groups = {};
+    recs.forEach(r=>{ (groups[r.machineId] = groups[r.machineId]||[]).push(r); });
+    const ids = Object.keys(groups).sort((a,b)=>{
+      const ia=order.indexOf(a), ib=order.indexOf(b);
+      return (ia<0?999:ia)-(ib<0?999:ib);
+    });
+    list.innerHTML = ids.map(id=>{
+      const items = groups[id].sort((a,b)=> new Date(b.startTime)-new Date(a.startTime));
+      return `<div class="rec-daygroup">${esc(id)} ${esc(machineName(id))} ・ ${items.length}件</div>` + items.map(recRow).join('');
+    }).join('') + olderRecordsBtn();
     return;
   }
 
-  // group by machine, in machine-list order
-  const order = store.machines.map(m=>m.id);
-  const groups = {};
-  recs.forEach(r=>{ (groups[r.machineId] = groups[r.machineId]||[]).push(r); });
-  const ids = Object.keys(groups).sort((a,b)=>{
-    const ia=order.indexOf(a), ib=order.indexOf(b);
-    return (ia<0?999:ia)-(ib<0?999:ib);
-  });
+  recs.sort((a,b)=> new Date(b.startTime)-new Date(a.startTime));   // 新しい日付が上
+  list.innerHTML = recs.map(recRow).join('') + olderRecordsBtn();
+}
 
-  list.innerHTML = ids.map(id=>{
-    const items = groups[id].sort((a,b)=> new Date(b.startTime)-new Date(a.startTime));
-    return `
-    <div class="mgroup">
-      <div class="mgroup-head">
-        <span class="gid">${esc(id)}</span>
-        <span class="gname">${esc(machineName(id))}</span>
-        <span class="gcount">${items.length}件</span>
-      </div>
-      ${items.map(recCard).join('')}
-    </div>`;
-  }).join('') + olderRecordsBtn();
+// 1行表示。タップで従来の詳細カードを開く
+function recRow(r){
+  const open = recOpen.has(r.id);
+  const running=r.status==='running', paused=r.status==='stopped', over=r.status==='overnight';
+  const st = running?['run','稼働中']:paused?['paused','停止中']:over?['over','持ち越し']:null;
+  const d = new Date(r.startTime);
+  const total = recordTotalQty(r);
+  const miss = recMissingQty(r);
+  const qty = miss ? '未入力' : (total>0 || (r.dailyCounts||[]).length ? total.toLocaleString()+'個' : '—');
+  return `<button class="rrow" onclick="toggleRecRow('${r.id}')">
+      <span class="rr-date">${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})</span>
+      <span class="rr-mach">${esc(r.machineId)}</span>
+      <span class="rr-part">${esc(r.partNo||'—')}</span>
+      ${st?`<span class="rr-st ${st[0]}">${st[1]}</span>`:''}
+      <span class="rr-qty${miss?' missing':''}">${qty}</span>
+      <span class="rr-ar">${open?'▲':'▼'}</span>
+    </button>` + (open ? recCard(r) : '');
 }
 // 直近ぶんだけ読み込んでいるので、さらに古い記録を読むボタンを出す
 function olderRecordsBtn(){
@@ -2998,7 +3080,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.20';
+const APP_VERSION = '2026-06-28.21';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
