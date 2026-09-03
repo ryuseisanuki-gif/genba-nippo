@@ -1345,13 +1345,39 @@ function renderPartHistory(){
   sel.value = [...sel.options].some(o=>o.value===cur) ? cur : '';
 }
 function fmtMD(t){ const d=new Date(t); return `${d.getMonth()+1}/${d.getDate()}`; }
+// その機械でその品番を最後に使った記録（コイル・回転数の呼び出し元）
+function lastRecordOf(machineId, partNo){
+  let best = null;
+  store.records.forEach(r=>{
+    if(r.machineId!==machineId) return;
+    if((r.partNo||'').trim() !== partNo) return;
+    if(!best || new Date(r.startTime) > new Date(best.startTime)) best = r;
+  });
+  return best;
+}
 function onPartHistory(){
   const v = $('#partHistory').value;
   if(!v) return;
-  scan = { raw:v, partNo:v, partName:'', qty:'', due:'' };
+  const prev = lastRecordOf(selectedMachineId, v);
+  scan = { raw:v, partNo:v, partName:(prev && prev.partName) || '', qty:'', due:'' };
   $('#scannedBox').value = v;
-  renderScanned(); renderStatus();
-  toast('品番 ' + v + ' を入力しました');
+
+  // 前回その品番で使った内容をそのまま呼び出す
+  const done = [];
+  if(prev){
+    if(prev.coilId && store.coils.some(c=>c.id===prev.coilId)){
+      selectedCoilId = prev.coilId;
+      const c = store.coils.find(x=>x.id===prev.coilId);
+      done.push('コイル ' + c.name);
+    }
+    if(prev.spm>0){ $('#spmInput').value = prev.spm; done.push(prev.spm + '回転/分'); }
+    if(prev.spp>0){ $('#sppInput').value = prev.spp; done.push(prev.spp + '回転で1個'); }
+    // 稼働中の記録があればそちらにも反映（開始前なら開始時に取り込まれる）
+    const a = shownRec();
+    if(a){ if(prev.spm>0) a.spm=prev.spm; if(prev.spp>0) a.spp=prev.spp; if(selectedCoilId) a.coilId=selectedCoilId; save(); }
+  }
+  renderCoilSelect(); renderScanned(); renderStatus();
+  toast(done.length ? v + ' ／ ' + done.join('・') + ' を呼び出しました' : '品番 ' + v + ' を入力しました', 'success');
 }
 $('#scannedBox').addEventListener('input', e=>{
   const v = e.target.value;
@@ -2972,7 +2998,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.19';
+const APP_VERSION = '2026-06-28.20';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
