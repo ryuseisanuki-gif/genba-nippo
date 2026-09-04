@@ -1226,6 +1226,20 @@ function stoppedFor(id){ return pickRec(store.records.filter(r=>r.machineId===id
 function overnightFor(id){ return pickRec(store.records.filter(r=>r.machineId===id && r.status==='overnight')); }
 function activeFor(id){ return pickRec(store.records.filter(r=>r.machineId===id && (r.status==='running'||r.status==='stopped'||r.status==='overnight'))); }
 function openStop(r){ return r && r.stops ? r.stops.find(s=>!s.to) : null; }
+function openStops(r){ return (r && r.stops) ? r.stops.filter(s=>!s.to) : []; }
+function closeAllOpenStops(r, iso){ let n=0; openStops(r).forEach(s=>{ s.to = iso; n++; }); return n; }
+// 「稼働中なのに閉じ忘れの停止が残っている」記録を自動で直す。
+// 複数端末が同時に停止/再開を押すと発生し、放置すると稼働率が下がり続ける。
+function healOpenStops(){
+  const nowIso = new Date().toISOString();
+  let fixed = 0;
+  store.records.forEach(r=>{
+    if(r.status!=='running') return;      // 停止中の記録は開いていて当然
+    fixed += closeAllOpenStops(r, nowIso);
+  });
+  if(fixed) save();
+  return fixed;
+}
 
 /* ── date / multi-day helpers ── */
 function dateKey(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
@@ -1649,7 +1663,9 @@ function confirmStop(){
   const chip = document.querySelector('#stopChips .chip.sel');
   if(!chip){ toast('停止の理由を選んでください','error'); return; }
   const reason = chip.textContent;
-  run.stops.push({ reason, detail: $('#stopDetail').value.trim(), from: new Date().toISOString(), to: null });
+  const nowIso = new Date().toISOString();
+  closeAllOpenStops(run, nowIso);   // 閉じ忘れが残っていたらここで閉じる（停止が二重に開かないように）
+  run.stops.push({ reason, detail: $('#stopDetail').value.trim(), from: nowIso, to: null });
   run.status = 'stopped';
   let stockMsg = '';
   if(reason === 'コイル交換'){
@@ -1666,8 +1682,9 @@ function confirmStop(){
 function resumeJob(){
   const r = shownWith('stopped');
   if(!r) return;
-  const os = openStop(r);
-  if(os) os.to = new Date().toISOString();
+  // 開いている停止は「全部」閉じる。1つだけ閉じると、他端末が同時に作った停止が
+  // 取り残されて「稼働中なのに止まっている」状態が続いてしまう
+  closeAllOpenStops(r, new Date().toISOString());
   r.status = 'running';
   save();
   toast('作業を再開しました','success');
@@ -1911,6 +1928,22 @@ function notifyPendingCarry(){
   const names = pend.map(r=>r.machineId).join('・');
   toast(`${names} が本日終了です。機械を選んで本日の個数を入力してください`, 'success');
 }
+// 長時間止まったままの機械を知らせる（再開の押し忘れ対策）。同じ機械は30分ごとに1回まで。
+const LONG_STOP_MIN = 30;
+const longStopNotified = {};
+function notifyLongStops(){
+  const now = Date.now();
+  store.records.forEach(r=>{
+    if(r.status!=='stopped') return;
+    const os = openStop(r); if(!os || os.reason==='休憩') return;
+    const mins = Math.round((now - new Date(os.from).getTime())/60000);
+    if(mins < LONG_STOP_MIN) return;
+    const last = longStopNotified[r.id] || 0;
+    if(now - last < LONG_STOP_MIN*60000) return;
+    longStopNotified[r.id] = now;
+    toast(`${r.machineId} が ${durLabel(mins)} 止まったままです（${os.reason}）。再開を押し忘れていませんか`, 'error');
+  });
+}
 function openCarryById(id){
   const r = store.records.find(x=>x.id===id);
   if(r) openCarrySheet(r);
@@ -1993,15 +2026,18 @@ function processBreaks(){
         }
       });
     } else if(now >= beT){
-      // 休憩後：休憩で止めた作業を自動再開
+      // 休憩後：休憩で止めた作業を自動再開。
+      // 状態が running でも「開いたままの休憩」は必ず休憩終了時刻で閉じる
+      //（他端末との同時操作で取り残されると、昼休み以降ずっと停止扱いになるため）
       store.records.forEach(r=>{
-        if(r.status!=='stopped') return;
-        const os = r.stops && r.stops.find(s=>!s.to);
-        if(os && os.reason==='休憩' && new Date(os.from).getTime()>=bsT && new Date(os.from).getTime()<beT){
-          os.to = new Date(beT).toISOString();
-          r.status='running';
-          changed=true;
-        }
+        if(r.status==='done') return;
+        let hit=false;
+        openStops(r).forEach(os=>{
+          if(os.reason!=='休憩') return;
+          const f=new Date(os.from).getTime();
+          if(f>=bsT && f<beT){ os.to = new Date(beT).toISOString(); hit=true; changed=true; }
+        });
+        if(hit && r.status==='stopped' && openStops(r).length===0) r.status='running';
       });
     }
   });
@@ -2011,8 +2047,10 @@ function processBreaks(){
 function tickBoundaries(){
   const changed = processDayBoundaries();
   const brk = processBreaks();
+  const heal = healOpenStops();     // 閉じ忘れの停止を自動で直す
   const auto = processAutoDaily();
-  if(changed || brk || auto){ refreshActiveViews(); notifyPendingCarry(); }
+  notifyLongStops();                // 再開の押し忘れを知らせる
+  if(changed || brk || heal || auto){ refreshActiveViews(); notifyPendingCarry(); }
 }
 
 function openEndSheet(){
@@ -3091,7 +3129,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.22';
+const APP_VERSION = '2026-06-28.23';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
