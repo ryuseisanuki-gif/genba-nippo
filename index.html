@@ -399,6 +399,19 @@
     padding:10px 13px;margin-bottom:11px;font-size:12.5px;color:var(--pause-d);font-weight:600;
   }
   .workday-note b{font-weight:800;}
+  /* ワンタップ停止ボタン（いちばん多い理由でその場で停止） */
+  .btn-big.btn-quick{background:var(--pause-bg);border:1.5px solid var(--pause);color:var(--pause-d);}
+  .btn-big.btn-quick:active{background:#f7e6c4;}
+  /* 個数が未入力の日のお知らせ（稼働中でも入力できる） */
+  .pending-note{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:11px;
+    background:var(--pause-bg);border:1px solid #ecd7a6;border-radius:10px;
+    padding:9px 12px;font-size:12.5px;font-weight:700;color:var(--pause-d);
+  }
+  .pending-note button{
+    margin-left:auto;padding:7px 13px;border-radius:8px;border:none;
+    background:var(--pause);color:#fff;font-family:var(--sans);font-size:12px;font-weight:800;
+  }
   /* 記録タブ：絞り込みチップ */
   .rec-chips{display:flex;gap:6px;margin-bottom:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
   .rec-chips::-webkit-scrollbar{display:none;}
@@ -983,6 +996,7 @@ function load(){
     if(!Array.isArray(r.stops)) r.stops = [];
     if(!('lastRunEnd' in r)) r.lastRunEnd = null;
     if(!r.sessionStart) r.sessionStart = r.startTime;
+    if(!Array.isArray(r.pendingDates)) r.pendingDates = (r.pendingCount && r.overnightDate) ? [r.overnightDate] : [];
     if(!Array.isArray(r.dailyCounts)){
       // legacy completed records: attribute the whole qty to the finish day
       if(r.status==='done' && r.endTime && r.qty!=null){
@@ -1460,7 +1474,9 @@ function renderStatus(){
           <div class="timer-sub">品番 <b>${esc(run.partNo)}</b>${run.partName?' / '+esc(run.partName):''}<br>開始 <b>${fmtDT(run.startTime)}</b>${multi?` ・ 本日分 ・ 累計 <b>${prior.toLocaleString()}</b>個`:''}${stMin>0?` ・ 停止累計 <b>${durLabel(stMin)}</b>`:''}</div>
         </div>
         <div style="padding:0 16px 18px">
+          ${pendingNote(run)}
           <div class="btn-row">
+            <button class="btn-big btn-quick" onclick="quickStop()"><span class="ic">⏸</span>${esc(topStopReason(run.machineId))}</button>
             <button class="btn-big btn-pause" onclick="openStopSheet()"><span class="ic">⏸</span>停止</button>
             <button class="btn-big btn-end-sm" onclick="openEndSheet()"><span class="ic">■</span>終了</button>
           </div>
@@ -1649,6 +1665,47 @@ function decCoilStock(coilId){
   }
   return c;
 }
+/* その機械でいちばん多い停止理由（＝ワンタップ停止ボタンの中身）。実績から自動で決まる */
+function topStopReason(machineId){
+  const cnt = {};
+  store.records.forEach(r=>{
+    if(r.machineId!==machineId) return;
+    (r.stops||[]).forEach(s=>{
+      if(!s.reason || s.reason==='休憩' || s.detail==='後から追加') return;
+      cnt[s.reason] = (cnt[s.reason]||0)+1;
+    });
+  });
+  const top = Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0];
+  return top ? top[0] : 'コイル交換';
+}
+/* ワンタップ停止：理由を選ばずにその場で停止する */
+function quickStop(){
+  const run = shownRunning();
+  if(!run) return;
+  const reason = topStopReason(run.machineId);
+  const nowIso = new Date().toISOString();
+  closeAllOpenStops(run, nowIso);
+  run.stops = run.stops || [];
+  run.stops.push({ reason, detail:'', from: nowIso, to: null });
+  run.status = 'stopped';
+  let stockMsg = '';
+  if(reason === 'コイル交換'){
+    const c = decCoilStock(run.coilId);
+    stockMsg = c ? `（${c.name} 残${c.stock}）` : '';
+  }
+  save();
+  toast(reason + 'で停止しました' + stockMsg);
+  renderMachineGrid(); renderStatus(); renderCoilSelect();
+}
+/* 個数が未入力の日がある場合の案内（稼働中でも表示して入力できるように） */
+function pendingNote(r){
+  const days = (r.pendingDates||[]);
+  if(!days.length) return '';
+  return `<div class="pending-note">
+      <span>${days.map(d=>d.replace(/-/g,'/')).join('・')} の生産個数が未入力です</span>
+      <button onclick="openCarryById('${r.id}')">入力する</button>
+    </div>`;
+}
 function openStopSheet(){
   const run = shownRunning();
   if(!run) return;
@@ -1702,28 +1759,32 @@ function processDayBoundaries(){
     if(r.status==='running' || r.status==='stopped'){
       const cut = cutoffT(r);
       if(now >= cut){
-        const os = openStop(r);
-        if(os) os.to = new Date(cut).toISOString();
+        closeAllOpenStops(r, new Date(cut).toISOString());
         r.lastRunEnd = new Date(cut).toISOString();
-        r.overnightDate = dateKey(new Date(r.sessionStart||r.startTime));
+        // 個数が未入力の日を溜めておく（後からまとめて入力できる）
+        const dk = dateKey(new Date(r.sessionStart||r.startTime));
+        r.pendingDates = r.pendingDates || [];
+        if(!r.pendingDates.includes(dk) && !(r.dailyCounts||[]).some(x=>x.date===dk)) r.pendingDates.push(dk);
+        r.overnightDate = r.pendingDates[0] || dk;
         r.status = 'overnight';
-        r.pendingCount = true;
+        r.pendingCount = r.pendingDates.length > 0;
         changed = true;
       }
     }
   });
-  // (2) New day past 9:00 → overnight jobs (count already entered) auto-resume
+  // (2) 翌営業日9:00 → 持ち越しの作業を自動再開。
+  // 前日の個数が未入力でも再開する（朝の操作をなくす。個数は後から入力できる）
   store.records.forEach(r=>{
-    if(r.status==='overnight' && !r.pendingCount){
-      const todayKey = dateKey(new Date());
-      const nine = atHour(new Date(), STD_START_H).getTime();
-      if(r.overnightDate && todayKey > r.overnightDate && now >= nine){
-        r.status = 'running';
-        r.sessionStart = atHour(new Date(), STD_START_H).toISOString();
-        r.lastRunEnd = null;
-        delete r.overnightDate;
-        changed = true;
-      }
+    if(r.status!=='overnight') return;
+    const todayKey = dateKey(new Date());
+    const nine = atHour(new Date(), STD_START_H).getTime();
+    const base = r.overnightDate || (r.pendingDates||[])[0] || dateKey(new Date(r.lastRunEnd||Date.now()));
+    if(base && todayKey > base && now >= nine && !offDay(new Date())){
+      r.status = 'running';
+      r.sessionStart = atHour(new Date(), STD_START_H).toISOString();
+      r.lastRunEnd = null;
+      if(!(r.pendingDates||[]).length){ r.pendingCount = false; delete r.overnightDate; }
+      changed = true;
     }
   });
   if(changed) save();
@@ -1901,7 +1962,8 @@ function processAutoDaily(){
   if(changed) save();
   return changed;
 }
-function pendingCarryRecords(){ return store.records.filter(r=>r.status==='overnight' && r.pendingCount); }
+// 個数が未入力の記録（自動再開後＝稼働中でも対象にする）
+function pendingCarryRecords(){ return store.records.filter(r=> r.pendingCount && r.status!=='done'); }
 
 let carryRecordId = null;
 function openCarrySheet(r){
@@ -1959,14 +2021,17 @@ function submitCarry(action){
   if(!r){ $('#carrySheet').classList.remove('active'); return; }
   const qv = $('#carryQty').value;
   if(qv==='' || isNaN(parseInt(qv))){ toast('本日の個数を入力してください','error'); return; }
+  const dk = r.overnightDate || (r.pendingDates||[])[0] || dateKey(new Date(r.lastRunEnd||Date.now()));
   r.dailyCounts = r.dailyCounts || [];
   r.dailyCounts.push({
-    date: r.overnightDate || dateKey(new Date(r.lastRunEnd||Date.now())),
+    date: dk,
     qty: parseInt(qv),
     at: new Date().toISOString(),
     note: $('#carryNote').value.trim()
   });
-  r.pendingCount = false;
+  r.pendingDates = (r.pendingDates||[]).filter(x=>x!==dk);
+  r.pendingCount = r.pendingDates.length > 0;
+  if(r.pendingCount) r.overnightDate = r.pendingDates[0]; else delete r.overnightDate;
   if(action==='done'){
     r.endTime = r.lastRunEnd || new Date().toISOString();
     r.qty = recordTotalQty(r);
@@ -3129,7 +3194,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.23';
+const APP_VERSION = '2026-06-28.24';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
