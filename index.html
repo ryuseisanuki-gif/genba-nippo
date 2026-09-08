@@ -788,9 +788,9 @@
   </div>
 
   <div class="card set-card">
-    <h3>🤖 自動記録（毎日 9:00開始・17:00終了）</h3>
+    <h3>🤖 自動記録（毎日 8:45開始・16:55終了）</h3>
     <div id="autoSettingsList"></div>
-    <div class="set-note">オンにした機械は毎日 9:00 に自動で作業開始し、17:00 に自動終了します（1日1記録）。休憩は自動で停止。<b>コイル交換などの停止と生産個数は手動</b>で入力してください（個数は「記録」タブで入力できます）。</div>
+    <div class="set-note">オンにした機械は毎日 8:45 に自動で作業開始し、16:55 に自動終了します（1日1記録）。休憩は自動で停止。<b>コイル交換などの停止と生産個数は手動</b>で入力してください（個数は「記録」タブで入力できます）。</div>
   </div>
 
   <div class="card set-card">
@@ -1200,10 +1200,15 @@ let selectedCoilId = null;
 let scan = { raw:'', partNo:'', partName:'', qty:'', due:'' };
 let summaryDate = (()=>{ const d=new Date(); d.setHours(0,0,0,0); return d; })();
 let summaryView = 'day';   // 'day' | 'month'
-const STD_START_H = 9, STD_END_H = 17, STD_MIN = (STD_END_H - STD_START_H) * 60;
 
 /* ===== UTILS ===== */
 const pad = n => String(n).padStart(2,'0');
+// 定時（始業・終業）。分単位で指定できる
+const STD_START_H = 8,  STD_START_M = 45;
+const STD_END_H   = 16, STD_END_M   = 55;
+const STD_MIN = (STD_END_H*60 + STD_END_M) - (STD_START_H*60 + STD_START_M);
+const STD_START_LABEL = pad(STD_START_H)+':'+pad(STD_START_M);
+const STD_END_LABEL   = pad(STD_END_H)+':'+pad(STD_END_M);
 const WD = ['日','月','火','水','木','金','土'];
 function fmtClock(d){ return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]}) ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function fmtDate(d){ return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日(${WD[d.getDay()]})`; }
@@ -1257,7 +1262,9 @@ function healOpenStops(){
 
 /* ── date / multi-day helpers ── */
 function dateKey(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
-function atHour(d, h){ const x=new Date(d); x.setHours(h,0,0,0); return x; }
+function atHour(d, h, mi){ const x=new Date(d); x.setHours(h, mi||0, 0, 0); return x; }
+function stdStart(d){ return atHour(d, STD_START_H, STD_START_M); }   // その日の始業時刻
+function stdEnd(d){   return atHour(d, STD_END_H,   STD_END_M);   }   // その日の終業時刻
 function endRefT(r){
   if(r.endTime) return new Date(r.endTime).getTime();
   if(r.lastRunEnd) return new Date(r.lastRunEnd).getTime();
@@ -1265,8 +1272,8 @@ function endRefT(r){
 }
 function cutoffT(r){
   const ss = new Date(r.sessionStart||r.startTime);
-  let c = atHour(ss, STD_END_H).getTime();
-  if(ss.getTime() >= c) c = atHour(new Date(ss.getTime()+86400000), STD_END_H).getTime();
+  let c = stdEnd(ss).getTime();
+  if(ss.getTime() >= c) c = stdEnd(new Date(ss.getTime()+86400000)).getTime();
   return c;
 }
 function recordTotalQty(r){
@@ -1519,7 +1526,7 @@ function renderStatus(){
           <div class="over-body">
             <div class="over-icon">🌙</div>
             <div class="over-title" style="color:var(--pause-d)">本日のカウンター数が未入力</div>
-            <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>17:00で本日終了になりました。本日の生産個数を入力してください。</div>
+            <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>${STD_END_LABEL}で本日終了になりました。本日の生産個数を入力してください。</div>
           </div>
           <div style="padding:14px 16px 18px">
             <button class="btn-big btn-pause" onclick="openCarryById('${over.id}')"><span class="ic">✏️</span>本日の個数を入力</button>
@@ -1532,7 +1539,7 @@ function renderStatus(){
         <div class="st-strip"><span class="d"></span>本日終了（持ち越し） — ${esc(over.machineId)}</div>
         <div class="over-body">
           <div class="over-icon">🌙</div>
-          <div class="over-title">翌営業日 9:00 に自動再開</div>
+          <div class="over-title">翌営業日 ${STD_START_LABEL} に自動再開</div>
           <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>${dc.length}日目まで完了 ・ 累計 <b>${prior.toLocaleString()}</b> 個</div>
           ${last?`<div class="over-count">本日(${esc((last.date||'').replace(/-/g,'/'))}) <b>${(last.qty||0).toLocaleString()}</b> 個</div>`:''}
         </div>
@@ -1777,11 +1784,11 @@ function processDayBoundaries(){
   store.records.forEach(r=>{
     if(r.status!=='overnight') return;
     const todayKey = dateKey(new Date());
-    const nine = atHour(new Date(), STD_START_H).getTime();
+    const nine = stdStart(new Date()).getTime();
     const base = r.overnightDate || (r.pendingDates||[])[0] || dateKey(new Date(r.lastRunEnd||Date.now()));
     if(base && todayKey > base && now >= nine && !offDay(new Date())){
       r.status = 'running';
-      r.sessionStart = atHour(new Date(), STD_START_H).toISOString();
+      r.sessionStart = stdStart(new Date()).toISOString();
       r.lastRunEnd = null;
       if(!(r.pendingDates||[]).length){ r.pendingCount = false; delete r.overnightDate; }
       changed = true;
@@ -1918,8 +1925,8 @@ function canMakeAuto(m, todays, shut){
 function processAutoDaily(){
   const now = Date.now();
   const today = new Date(); today.setHours(0,0,0,0);
-  const nine = new Date(today); nine.setHours(STD_START_H,0,0,0);
-  const seventeen = new Date(today); seventeen.setHours(STD_END_H,0,0,0);
+  const nine = stdStart(today);
+  const seventeen = stdEnd(today);
   const dk = dateKey(today);
   const off = offDay(today);               // 土日祝は自動記録を作らない（稼働指定した日は作る）
   let changed = false;
@@ -1934,7 +1941,7 @@ function processAutoDaily(){
       if(r.status!=='running' && r.status!=='stopped') return;
       const rd = new Date(r.startTime); rd.setHours(0,0,0,0);
       if(rd.getTime() < today.getTime()){
-        const end = new Date(rd); end.setHours(STD_END_H,0,0,0);
+        const end = stdEnd(rd);
         const os = openStop(r); if(os) os.to = end.toISOString();
         r.endTime = end.toISOString();
         r.status = 'done';
@@ -1969,7 +1976,7 @@ let carryRecordId = null;
 function openCarrySheet(r){
   carryRecordId = r.id;
   const dlabel = r.overnightDate ? r.overnightDate.replace(/-/g,'/') : '';
-  $('#carryMsg').textContent = `17:00を過ぎたため ${r.machineId} は本日終了になりました。本日のカウンター数（この日の生産個数）を入力してください。`;
+  $('#carryMsg').textContent = `${STD_END_LABEL}を過ぎたため ${r.machineId} は本日終了になりました。本日のカウンター数（この日の生産個数）を入力してください。`;
   const prior = (r.dailyCounts||[]).reduce((s,d)=>s+(d.qty||0),0);
   $('#carryRecap').innerHTML =
     `機械 <b>${esc(r.machineId)}</b> ／ 品番 <b>${esc(r.partNo)}</b><br>対象日 <b>${esc(dlabel)}</b>`+
@@ -2042,7 +2049,7 @@ function submitCarry(action){
   save();
   $('#carrySheet').classList.remove('active');
   carryRecordId = null;
-  toast(action==='done' ? '作業を完了しました' : '本日分を記録しました（翌営業日9時に自動再開）', 'success');
+  toast(action==='done' ? '作業を完了しました' : `本日分を記録しました（翌営業日${STD_START_LABEL}に自動再開）`, 'success');
   processDayBoundaries();
   refreshActiveViews();
   notifyPendingCarry();
@@ -2527,8 +2534,8 @@ function breakWindowAt(dayDate, t){
 }
 // 9:00–17:00 を1分刻みで判定（run/stop/remain）。休憩は常に stop（＝強制停止）。数値・帯グラフ共通。
 function machineDayStates(machineId, dayDate){
-  const ws=new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT=ws.getTime();
-  const weFull=new Date(dayDate); weFull.setHours(STD_END_H,0,0,0); const weFullT=weFull.getTime();
+  const ws=stdStart(dayDate); const wsT=ws.getTime();
+  const weFull=stdEnd(dayDate); const weFullT=weFull.getTime();
   const now=Date.now();
   const total=Math.max(1, Math.round((weFullT-wsT)/60000));
   const recs=store.records.filter(r=>r.machineId===machineId);
@@ -2579,8 +2586,8 @@ function summaryFor(machineId, dayDate){
   const rate = workWindow>0 ? Math.round(runMin/workWindow*100) : null;
 
   // 停止理由の内訳・生産個数
-  const ws=new Date(dayDate); ws.setHours(STD_START_H,0,0,0); const wsT=ws.getTime();
-  const weFull=new Date(dayDate); weFull.setHours(STD_END_H,0,0,0);
+  const ws=stdStart(dayDate); const wsT=ws.getTime();
+  const weFull=stdEnd(dayDate);
   const now=Date.now(); const weEff=Math.min(weFull.getTime(), now);
   const dayKey=dateKey(new Date(dayDate));
   let loggedStopMin=0, qty=0, cumQty=0, finishedCount=0; const reasons={};
@@ -2737,7 +2744,7 @@ function renderSummary(){
       <div class="e-t">${off.type==='holiday'?'祝日':'週末'}のため休業（${esc(off.label)}）</div>
       <div class="e-t" style="font-size:12px;color:var(--ink3);font-weight:600">稼働率・平均・目標の対象外です</div>
       <button class="workday-btn" onclick="setWorkday('${dk}',true)">▶ この日は稼働する（集計に入れる）</button>
-      <div class="e-t" style="font-size:11.5px;color:var(--ink3);font-weight:600;margin-top:8px">押すと通常の稼働日として集計され、自動記録の機械も9:00に開始します</div>
+      <div class="e-t" style="font-size:11.5px;color:var(--ink3);font-weight:600;margin-top:8px">押すと通常の稼働日として集計され、自動記録の機械も${STD_START_LABEL}に開始します</div>
     </div>`;
     return;
   }
@@ -2754,7 +2761,7 @@ function renderSummary(){
   const avgRate = totalWork > 0 ? Math.round(totalRun/totalWork*100) : null;
   $('#sumDayMeta').innerHTML = `
     <div class="dm"><div class="lab">本日の生産個数</div><div class="val">${totalQty.toLocaleString()}<small> 個</small></div></div>
-    <div class="dm"><div class="lab">平均稼働率（9〜17時）</div><div class="val">${avgRate==null?'—':avgRate+'<small> %</small>'}</div></div>`;
+    <div class="dm"><div class="lab">平均稼働率（${STD_START_LABEL}〜${STD_END_LABEL}）</div><div class="val">${avgRate==null?'—':avgRate+'<small> %</small>'}</div></div>`;
 
   const list = $('#summaryList');
   if(!store.machines.length){
@@ -2793,7 +2800,7 @@ function renderSummary(){
       <div class="sum-bar">
         ${summaryTimeline(m.id, d).map(seg=>`<div class="seg ${seg.state}" style="width:${seg.pct}%"></div>`).join('')}
       </div>
-      <div class="sum-scale"><span>9:00</span><span>13:00</span><span>17:00</span></div>
+      <div class="sum-scale"><span>${STD_START_LABEL}</span><span>${pad(Math.floor((STD_START_H*60+STD_START_M+STD_MIN/2)/60))}:${pad(Math.round((STD_START_H*60+STD_START_M+STD_MIN/2)%60))}</span><span>${STD_END_LABEL}</span></div>
       <div class="sum-legend"><span><i class="run"></i>動いている</span><span><i class="stop"></i>止まっている</span><span><i class="break"></i>休憩</span><span><i class="addstop"></i>後から追加</span></div>
       <div class="sum-stats">
         <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
@@ -3194,7 +3201,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.24';
+const APP_VERSION = '2026-06-28.25';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
