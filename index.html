@@ -790,7 +790,7 @@
   <div class="card set-card">
     <h3>🤖 自動記録（毎日 8:45開始・16:55終了）</h3>
     <div id="autoSettingsList"></div>
-    <div class="set-note">オンにした機械は毎日 8:45 に自動で作業開始し、16:55 に自動終了します（1日1記録）。休憩は自動で停止。<b>コイル交換などの停止と生産個数は手動</b>で入力してください（個数は「記録」タブで入力できます）。</div>
+    <div class="set-note">オンにした機械は毎日 8:45 に自動で作業開始し、16:55 に自動終了します（1日1記録）。※2026/09/08 以前は 9:00〜17:00 で集計されます。休憩は自動で停止。<b>コイル交換などの停止と生産個数は手動</b>で入力してください（個数は「記録」タブで入力できます）。</div>
   </div>
 
   <div class="card set-card">
@@ -1203,12 +1203,21 @@ let summaryView = 'day';   // 'day' | 'month'
 
 /* ===== UTILS ===== */
 const pad = n => String(n).padStart(2,'0');
-// 定時（始業・終業）。分単位で指定できる
-const STD_START_H = 8,  STD_START_M = 45;
-const STD_END_H   = 16, STD_END_M   = 55;
-const STD_MIN = (STD_END_H*60 + STD_END_M) - (STD_START_H*60 + STD_START_M);
-const STD_START_LABEL = pad(STD_START_H)+':'+pad(STD_START_M);
-const STD_END_LABEL   = pad(STD_END_H)+':'+pad(STD_END_M);
+// 定時（始業・終業）。日付で切り替わる。過去の集計は当時の定時のまま計算される。
+// 変更するときは新しい行を追加する（from 以降に適用）。
+const STD_SCHEDULES = [
+  { from:'0000-00-00', sh:9, sm:0,  eh:17, em:0  },   // 〜2026/09/08
+  { from:'2026-09-09', sh:8, sm:45, eh:16, em:55 }    // 2026/09/09〜
+];
+function stdFor(d){
+  const k = dateKey(d instanceof Date ? d : new Date(d));
+  let cur = STD_SCHEDULES[0];
+  STD_SCHEDULES.forEach(s=>{ if(k >= s.from) cur = s; });
+  return cur;
+}
+function stdMin(d){ const s=stdFor(d); return (s.eh*60+s.em)-(s.sh*60+s.sm); }
+function stdStartLabel(d){ const s=stdFor(d); return pad(s.sh)+':'+pad(s.sm); }
+function stdEndLabel(d){   const s=stdFor(d); return pad(s.eh)+':'+pad(s.em); }
 const WD = ['日','月','火','水','木','金','土'];
 function fmtClock(d){ return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]}) ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function fmtDate(d){ return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日(${WD[d.getDay()]})`; }
@@ -1263,8 +1272,8 @@ function healOpenStops(){
 /* ── date / multi-day helpers ── */
 function dateKey(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 function atHour(d, h, mi){ const x=new Date(d); x.setHours(h, mi||0, 0, 0); return x; }
-function stdStart(d){ return atHour(d, STD_START_H, STD_START_M); }   // その日の始業時刻
-function stdEnd(d){   return atHour(d, STD_END_H,   STD_END_M);   }   // その日の終業時刻
+function stdStart(d){ const s=stdFor(d); return atHour(d, s.sh, s.sm); }   // その日の始業時刻
+function stdEnd(d){   const s=stdFor(d); return atHour(d, s.eh, s.em); }   // その日の終業時刻
 function endRefT(r){
   if(r.endTime) return new Date(r.endTime).getTime();
   if(r.lastRunEnd) return new Date(r.lastRunEnd).getTime();
@@ -1526,7 +1535,7 @@ function renderStatus(){
           <div class="over-body">
             <div class="over-icon">🌙</div>
             <div class="over-title" style="color:var(--pause-d)">本日のカウンター数が未入力</div>
-            <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>${STD_END_LABEL}で本日終了になりました。本日の生産個数を入力してください。</div>
+            <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>${stdEndLabel(new Date(over.lastRunEnd||Date.now()))}で本日終了になりました。本日の生産個数を入力してください。</div>
           </div>
           <div style="padding:14px 16px 18px">
             <button class="btn-big btn-pause" onclick="openCarryById('${over.id}')"><span class="ic">✏️</span>本日の個数を入力</button>
@@ -1539,7 +1548,7 @@ function renderStatus(){
         <div class="st-strip"><span class="d"></span>本日終了（持ち越し） — ${esc(over.machineId)}</div>
         <div class="over-body">
           <div class="over-icon">🌙</div>
-          <div class="over-title">翌営業日 ${STD_START_LABEL} に自動再開</div>
+          <div class="over-title">翌営業日 ${stdStartLabel(new Date(Date.now()+86400000))} に自動再開</div>
           <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>${dc.length}日目まで完了 ・ 累計 <b>${prior.toLocaleString()}</b> 個</div>
           ${last?`<div class="over-count">本日(${esc((last.date||'').replace(/-/g,'/'))}) <b>${(last.qty||0).toLocaleString()}</b> 個</div>`:''}
         </div>
@@ -1976,7 +1985,7 @@ let carryRecordId = null;
 function openCarrySheet(r){
   carryRecordId = r.id;
   const dlabel = r.overnightDate ? r.overnightDate.replace(/-/g,'/') : '';
-  $('#carryMsg').textContent = `${STD_END_LABEL}を過ぎたため ${r.machineId} は本日終了になりました。本日のカウンター数（この日の生産個数）を入力してください。`;
+  $('#carryMsg').textContent = `${stdEndLabel(new Date(r.lastRunEnd||Date.now()))}を過ぎたため ${r.machineId} は本日終了になりました。本日のカウンター数（この日の生産個数）を入力してください。`;
   const prior = (r.dailyCounts||[]).reduce((s,d)=>s+(d.qty||0),0);
   $('#carryRecap').innerHTML =
     `機械 <b>${esc(r.machineId)}</b> ／ 品番 <b>${esc(r.partNo)}</b><br>対象日 <b>${esc(dlabel)}</b>`+
@@ -2049,7 +2058,7 @@ function submitCarry(action){
   save();
   $('#carrySheet').classList.remove('active');
   carryRecordId = null;
-  toast(action==='done' ? '作業を完了しました' : `本日分を記録しました（翌営業日${STD_START_LABEL}に自動再開）`, 'success');
+  toast(action==='done' ? '作業を完了しました' : `本日分を記録しました（翌営業日${stdStartLabel(new Date(Date.now()+86400000))}に自動再開）`, 'success');
   processDayBoundaries();
   refreshActiveViews();
   notifyPendingCarry();
@@ -2744,7 +2753,7 @@ function renderSummary(){
       <div class="e-t">${off.type==='holiday'?'祝日':'週末'}のため休業（${esc(off.label)}）</div>
       <div class="e-t" style="font-size:12px;color:var(--ink3);font-weight:600">稼働率・平均・目標の対象外です</div>
       <button class="workday-btn" onclick="setWorkday('${dk}',true)">▶ この日は稼働する（集計に入れる）</button>
-      <div class="e-t" style="font-size:11.5px;color:var(--ink3);font-weight:600;margin-top:8px">押すと通常の稼働日として集計され、自動記録の機械も${STD_START_LABEL}に開始します</div>
+      <div class="e-t" style="font-size:11.5px;color:var(--ink3);font-weight:600;margin-top:8px">押すと通常の稼働日として集計され、自動記録の機械も${stdStartLabel(d)}に開始します</div>
     </div>`;
     return;
   }
@@ -2761,7 +2770,7 @@ function renderSummary(){
   const avgRate = totalWork > 0 ? Math.round(totalRun/totalWork*100) : null;
   $('#sumDayMeta').innerHTML = `
     <div class="dm"><div class="lab">本日の生産個数</div><div class="val">${totalQty.toLocaleString()}<small> 個</small></div></div>
-    <div class="dm"><div class="lab">平均稼働率（${STD_START_LABEL}〜${STD_END_LABEL}）</div><div class="val">${avgRate==null?'—':avgRate+'<small> %</small>'}</div></div>`;
+    <div class="dm"><div class="lab">平均稼働率（${stdStartLabel(d)}〜${stdEndLabel(d)}）</div><div class="val">${avgRate==null?'—':avgRate+'<small> %</small>'}</div></div>`;
 
   const list = $('#summaryList');
   if(!store.machines.length){
@@ -2781,9 +2790,10 @@ function renderSummary(){
       return `<div class="sum-card"><div class="sum-head"><span class="sid">${esc(m.id)}</span><span class="sname">${esc(m.name||'')}</span><span class="srate none">🛌 休業</span></div><div class="sum-jobs">休業${mShut.label?'（'+esc(mShut.label)+'）':''} ・ 集計対象外</div></div>`;
     }
     const s = summaryFor(m.id, d);
-    const runPct  = STD_MIN ? (s.runMin/STD_MIN*100) : 0;
-    const stopPct = STD_MIN ? (s.notRun/STD_MIN*100) : 0;
-    const remPct  = STD_MIN ? (s.remain/STD_MIN*100) : 0;
+    const dayMin  = stdMin(d);
+    const runPct  = dayMin ? (s.runMin/dayMin*100) : 0;
+    const stopPct = dayMin ? (s.notRun/dayMin*100) : 0;
+    const remPct  = dayMin ? (s.remain/dayMin*100) : 0;
     const rateCls = s.rate==null ? 'none' : (s.rate>=60 ? '' : 'low');
     const reasonKeys = Object.keys(s.reasons);
     const reasonsHtml = reasonKeys.length ? `
@@ -2800,7 +2810,7 @@ function renderSummary(){
       <div class="sum-bar">
         ${summaryTimeline(m.id, d).map(seg=>`<div class="seg ${seg.state}" style="width:${seg.pct}%"></div>`).join('')}
       </div>
-      <div class="sum-scale"><span>${STD_START_LABEL}</span><span>${pad(Math.floor((STD_START_H*60+STD_START_M+STD_MIN/2)/60))}:${pad(Math.round((STD_START_H*60+STD_START_M+STD_MIN/2)%60))}</span><span>${STD_END_LABEL}</span></div>
+      <div class="sum-scale"><span>${stdStartLabel(d)}</span><span>${(()=>{const sc=stdFor(d);const mid=sc.sh*60+sc.sm+Math.round(stdMin(d)/2);return pad(Math.floor(mid/60))+':'+pad(mid%60);})()}</span><span>${stdEndLabel(d)}</span></div>
       <div class="sum-legend"><span><i class="run"></i>動いている</span><span><i class="stop"></i>止まっている</span><span><i class="break"></i>休憩</span><span><i class="addstop"></i>後から追加</span></div>
       <div class="sum-stats">
         <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
@@ -3201,7 +3211,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.25';
+const APP_VERSION = '2026-06-28.26';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
