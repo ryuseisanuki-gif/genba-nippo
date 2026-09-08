@@ -1925,11 +1925,56 @@ function dedupeAutoRecords(){
   drop.forEach(id=> delDoc('records', id));
   return true;
 }
+// 同じ機械・同じ日に「自動記録」と「手動記録」が両方できてしまった場合、手動を残して自動を取り込む。
+// 自動記録側の停止は、手動側に同じ理由で時間が重なるものが無ければ引き継ぐ
+//（重なる場合は手動側が正しいので取り込まない。再開の押し忘れで伸びた停止を持ち込まないため）
+function resolveAutoVsManual(){
+  const groups = {};
+  store.records.forEach(r=>{
+    const k = r.machineId + '|' + dateKey(new Date(r.startTime));
+    (groups[k] = groups[k] || []).push(r);
+  });
+  const drop = [];
+  Object.values(groups).forEach(list=>{
+    const autos   = list.filter(r=>r.auto===true);
+    const manuals = list.filter(r=>r.auto!==true);
+    if(!autos.length || !manuals.length) return;
+    const keep = pickRec(manuals);
+    autos.forEach(a=>{
+      keep.stops = keep.stops || [];
+      (a.stops||[]).forEach(s=>{
+        const sf=new Date(s.from).getTime(), st=s.to?new Date(s.to).getTime():Infinity;
+        const dup = keep.stops.some(k=>{
+          if(k.reason!==s.reason) return false;
+          const kf=new Date(k.from).getTime(), kt=k.to?new Date(k.to).getTime():Infinity;
+          return sf < kt && kf < st;                       // 時間が重なっていれば同じ事象とみなす
+        });
+        if(!dup) keep.stops.push(s);
+      });
+      keep.dailyCounts = keep.dailyCounts || [];
+      (a.dailyCounts||[]).forEach(dc=>{
+        if(!keep.dailyCounts.some(x=>x.date===dc.date)) keep.dailyCounts.push(dc);   // 同じ日の二重計上は防ぐ
+      });
+      drop.push(a.id);
+    });
+    keep.stops.sort((x,y)=> new Date(x.from)-new Date(y.from));
+  });
+  if(!drop.length) return false;
+  store.records = store.records.filter(r=> !drop.includes(r.id));
+  drop.forEach(id=> delDoc('records', id));
+  return true;
+}
+// その機械にその日の記録が既にあるか（手動・自動を問わない）
+function hasRecordOn(machineId, dayDate){
+  const dk = dateKey(dayDate);
+  return store.records.some(r=> r.machineId===machineId && dateKey(new Date(r.startTime))===dk);
+}
 // 自動記録を新しく作ってよいか（同期未完了・休業・既に作業中・同じIDが既にある場合は作らない）
 function canMakeAuto(m, todays, shut){
   if(!autoCreateReady || shut || todays.length>0 || activeFor(m.id)) return false;
   const today = new Date(); today.setHours(0,0,0,0);
-  return !store.records.some(r=> r.id === autoRecId(m.id, today));
+  if(store.records.some(r=> r.id === autoRecId(m.id, today))) return false;
+  return !hasRecordOn(m.id, today);   // 手動で開始した記録がある日は自動記録を作らない
 }
 function processAutoDaily(){
   const now = Date.now();
@@ -1939,7 +1984,8 @@ function processAutoDaily(){
   const dk = dateKey(today);
   const off = offDay(today);               // 土日祝は自動記録を作らない（稼働指定した日は作る）
   let changed = false;
-  if(dedupeAutoRecords()) changed = true;  // 端末の同時起動でできた「中身の無い重複」を掃除
+  if(dedupeAutoRecords()) changed = true;    // 端末の同時起動でできた「中身の無い重複」を掃除
+  if(resolveAutoVsManual()) changed = true;  // 自動と手動が重なったら手動を残す
   store.machines.forEach(m=>{
     const a = m.auto;
     if(!a || !a.on) return;
@@ -3211,7 +3257,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.26';
+const APP_VERSION = '2026-06-28.27';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
