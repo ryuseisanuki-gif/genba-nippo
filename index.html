@@ -2694,9 +2694,35 @@ function summaryTimeline(machineId, dayDate){
 }
 
 /* 1日ぶんの全機械合計（休業の機械は除外） */
+/* 機械ごとの「集計を始める日」。登録日(since)があればそれ、無ければ最初の記録の日。
+   これより前の日は、その機械がまだ無かったものとして平均や合計に含めない。 */
+let _machStart = { n:-1, map:{} };
+function machineStartKey(machineId){
+  if(_machStart.n !== store.records.length){
+    const map={};
+    store.records.forEach(r=>{
+      const k = dateKey(new Date(r.startTime));
+      if(!map[r.machineId] || k < map[r.machineId]) map[r.machineId] = k;
+    });
+    _machStart = { n:store.records.length, map };
+  }
+  const m = store.machines.find(x=>x.id===machineId);
+  if(m && m.since) return m.since;
+  return _machStart.map[machineId] || null;
+}
+function machineExistsOn(machineId, dayDate){
+  const s = machineStartKey(machineId);
+  if(!s) return false;                       // 登録日も記録も無い機械は集計に含めない
+  return dateKey(dayDate) >= s;
+}
+/* その日に集計対象となる機械（休業中・登録前を除く） */
+function machinesOn(d){
+  return store.machines.filter(m=> machineExistsOn(m.id, d) && !isShutdown(d, m.id));
+}
 function dayAgg(d){
-  const active = store.machines.filter(m=> !isShutdown(d, m.id));
-  const allShut = store.machines.length>0 && active.length===0;
+  const existing = store.machines.filter(m=> machineExistsOn(m.id, d));   // その日に存在した機械
+  const active = existing.filter(m=> !isShutdown(d, m.id));
+  const allShut = existing.length>0 && active.length===0;
   let qty=0, run=0, work=0, recs=0;
   active.forEach(m=>{ const s=summaryFor(m.id, d); qty+=s.qty; run+=s.runMin; work+=s.workWindow; recs+=s.finishedCount; });
   return { qty, run, work, recs, allShut, rate: work>0 ? Math.round(run/work*100) : null };
@@ -2780,10 +2806,12 @@ function renderSummary(){
   const isToday = d.getTime() === today.getTime();
   $('#sumDateLabel').textContent = fmtDate(d) + (isToday ? '（今日）' : '');
 
+  // その日に存在した機械だけを対象にする（後から登録した機械は、それ以前の日の平均に含めない）
+  const existMachines = store.machines.filter(m=> machineExistsOn(m.id, d));
   // 休止期間（稼働しない日）は機械ごとに集計対象外
-  const activeMachines = store.machines.filter(m=> !isShutdown(d, m.id));
-  if(store.machines.length>0 && activeMachines.length===0){
-    const sd0 = isShutdown(d, store.machines[0].id);
+  const activeMachines = existMachines.filter(m=> !isShutdown(d, m.id));
+  if(existMachines.length>0 && activeMachines.length===0){
+    const sd0 = isShutdown(d, existMachines[0].id);
     $('#sumDayMeta').innerHTML = `<div class="dm" style="grid-column:1/-1"><div class="lab">この日は</div><div class="val">🛌 休業${sd0&&sd0.label?'（'+esc(sd0.label)+'）':''}</div></div>`;
     $('#summaryList').innerHTML = `<div class="empty"><div class="e-ic">🛌</div><div class="e-t">全機械 休業</div><div class="e-t" style="font-size:12px;color:var(--ink3);font-weight:600">この日は稼働率・平均・目標の対象外です</div></div>`;
     return;
@@ -2823,6 +2851,10 @@ function renderSummary(){
     list.innerHTML = '<div class="empty"><div class="e-ic">🏭</div><div class="e-t">「設定」タブで機械を登録してください</div></div>';
     return;
   }
+  if(!existMachines.length){
+    list.innerHTML = '<div class="empty"><div class="e-ic">🗓️</div><div class="e-t">この日はまだ記録対象の機械がありません</div></div>';
+    return;
+  }
 
   // 土日祝を稼働日として集計している旨の表示（休業に戻せる）
   const wdBanner = offBase ? `<div class="workday-note">
@@ -2830,7 +2862,7 @@ function renderSummary(){
       ${forced?`<button onclick="setWorkday('${dateKey(d)}',false)">休業に戻す</button>`:''}
     </div>` : '';
 
-  list.innerHTML = wdBanner + store.machines.map(m=>{
+  list.innerHTML = wdBanner + existMachines.map(m=>{
     const mShut = isShutdown(d, m.id);
     if(mShut){
       return `<div class="sum-card"><div class="sum-head"><span class="sid">${esc(m.id)}</span><span class="sname">${esc(m.name||'')}</span><span class="srate none">🛌 休業</span></div><div class="sum-jobs">休業${mShut.label?'（'+esc(mShut.label)+'）':''} ・ 集計対象外</div></div>`;
@@ -3053,7 +3085,8 @@ function addMachine(){
   const name = $('#newMachName').value.trim();
   if(!id){ toast('機番を入力してください','error'); return; }
   if(store.machines.some(m=>m.id===id)){ toast('同じ機番が登録済みです','error'); return; }
-  store.machines.push({id, name});
+  // 登録日を残す。これより前の日は、この機械を平均や合計に含めない
+  store.machines.push({id, name, since: dateKey(new Date())});
   save();
   $('#newMachId').value=''; $('#newMachName').value='';
   renderMachineSettings(); renderMachineGrid();
@@ -3257,7 +3290,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.27';
+const APP_VERSION = '2026-06-28.28';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
