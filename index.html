@@ -672,6 +672,8 @@
   .plan-demo span{flex:1;min-width:240px;}
   .plan-demo button{padding:8px 13px;border-radius:9px;border:1px solid #bcd3ef;background:#fff;color:#23538a;font-size:12.5px;font-weight:700;}
   .plan-demo button:active{background:#e3edf9;}
+  .demo-chip{display:inline-block;font-size:11px;font-weight:800;color:#23538a;background:#eef4fc;border:1px solid #bcd3ef;
+    border-radius:999px;padding:1px 8px;margin-left:7px;vertical-align:2px;letter-spacing:0;font-family:var(--sans);}
   .plan-todo{display:flex;align-items:center;gap:7px 9px;flex-wrap:wrap;background:var(--pause-bg);border:1px solid #ecd7a6;border-radius:11px;
     padding:9px 12px;margin-bottom:10px;font-size:12.5px;font-weight:700;color:var(--pause-d);}
   .plan-todo button{padding:7px 12px;border-radius:9px;border:1.5px dashed var(--pause);background:#fff;color:var(--pause-d);font-size:12.5px;font-weight:800;font-family:var(--mono);}
@@ -3537,6 +3539,9 @@ document.body.classList.toggle('can-drag', canDrag);
 const isPC = !!(window.matchMedia && matchMedia('(hover:hover) and (pointer:fine)').matches);
 document.body.classList.toggle('is-pc', isPC);
 // デモ中のパソコン：日報入力の「バーコードを読み取る」は外し、「注文を追加」で入れる（スマホはそのまま）
+// デモの部分には「🧪 デモ」の印を付ける（本番の画面と見分けられるように）
+const DEMO_CHIP = PLAN_DEMO ? '<span class="demo-chip">🧪 デモ</span>' : '';
+if(PLAN_DEMO){ const t = document.querySelector('.tab[data-tab=plan]'); if(t) t.innerHTML = '<span class="ic">🧪</span>予定（デモ）'; }
 if(PLAN_DEMO && isPC){
   $('#stepScan').hidden = true; $('#stepScanNote').hidden = false; $('#stepStartNum').textContent = '2';
 }
@@ -4044,7 +4049,7 @@ function planNextCard(nx){
   const o = nx.o, nowP = planTodayPos(o.machineId);
   const early = nx.s.d > nowP.d;
   return `<div class="next-plan">
-    <div class="np-h">📅 次の予定</div>
+    <div class="np-h">📅 次の予定${DEMO_CHIP}</div>
     <div class="np-part">${esc(o.partNo)}</div>
     <div class="np-sub">${o.qty.toLocaleString()}個 ・ 納期 <b>${numMDW(dayNum(o.due))}</b><br>予定 ${numMDW(nx.s.d)}〜${numMDW(nx.last)}${nx.c.ok ? `（見込み${planFmtDays(nx.c.need)}日）` : ''}${nx.late ? ' <span class="np-late">納期に遅れる見込み</span>' : ''}</div>
     <button class="btn-big btn-start" onclick="startFromOrder('${o.id}')"><span class="ic">▶</span>この予定で開始</button>
@@ -4176,7 +4181,7 @@ function openOrderSheet(id){
   osId = o ? o.id : null;
   osCoilTouched = !!o;
   osSpeedTouched = !!(o && (o.spm || o.spp));
-  $('#osTitle').textContent = !o ? '注文を追加' : o.needsInput ? '作業中の注文：残りの数量と納期を入れてください' : '注文の編集';
+  $('#osTitle').innerHTML = esc(!o ? '注文を追加' : o.needsInput ? '作業中の注文：残りの数量と納期を入れてください' : '注文の編集') + DEMO_CHIP;
   // 過去の品番（全部の機械・新しい順）。選ぶとコイル・回転数も呼び出す
   const seen = new Map();
   store.records.forEach(r=>{
@@ -4335,7 +4340,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.33';
+const APP_VERSION = '2026-06-28.34';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
