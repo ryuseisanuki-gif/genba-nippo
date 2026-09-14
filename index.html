@@ -568,7 +568,7 @@
   .set-note{font-size:12px;color:var(--ink3);margin-top:10px;line-height:1.6;}
 
   /* ── Scanner modal ── */
-  .scan-modal{display:none;position:fixed;inset:0;background:#000;z-index:200;flex-direction:column;}
+  .scan-modal{display:none;position:fixed;inset:0;background:#000;z-index:220;flex-direction:column;}   /* 注文の画面(210)より上に出す */
   .scan-modal.active{display:flex;}
   .scan-modal video{width:100%;height:100%;object-fit:cover;position:absolute;inset:0;}
   .scan-frame{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;}
@@ -760,7 +760,9 @@
   .oc-ed{padding:10px 14px;border-radius:10px;border:1px solid var(--line2);background:var(--surface);color:var(--ink2);font-size:13px;font-weight:700;}
   .oc-ed:active{background:var(--surface2);}
   #orderSheet .sheet{max-height:94vh;overflow-y:auto;}
-  .of label{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ink3);font-weight:700;margin-bottom:10px;}
+  .of > label,.of2 label{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ink3);font-weight:700;margin-bottom:10px;}
+  .of .scanned-input{margin-bottom:0;}
+  .os-scan{margin:-2px 0 14px;}
   .of-in{width:100%;background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:11px 12px;font-size:16px;color:var(--ink);font-family:var(--sans);min-width:0;}
   .of-in.mono{font-family:var(--mono);}
   .of-in:focus{outline:none;border-color:var(--orange);}
@@ -810,7 +812,11 @@
     <div class="machine-grid" id="machineGrid"></div>
   </div>
 
-  <div class="step">
+  <div class="step" id="stepScanNote" hidden>
+    <div class="plan-demo" style="margin:0"><span>🧪 <b>デモ中</b>：このパソコンでは、品番・コイル・回転数は「🗓️ 予定」タブの「＋ 注文を追加」で入れます。作業は下の「次の予定」から開始します（スマホは今まで通り）。</span></div>
+  </div>
+
+  <div class="step" id="stepScan">
     <div class="step-head">
       <div class="step-num">2</div>
       <div class="step-title">バーコードを読み取る</div>
@@ -839,7 +845,7 @@
 
   <div class="step">
     <div class="step-head">
-      <div class="step-num">3</div>
+      <div class="step-num" id="stepStartNum">3</div>
       <div class="step-title">作業の開始・終了</div>
     </div>
     <div id="statusPanel"></div>
@@ -1120,16 +1126,30 @@
     <div class="grab"></div>
     <h3 id="osTitle">注文を追加</h3>
     <div class="of">
-      <label>品番<input type="text" id="osPart" class="of-in mono" list="osPartList" autocomplete="off" placeholder="例 9991-2400-016X" oninput="osRefresh()"></label>
-      <datalist id="osPartList"></datalist>
+      <label>品番<input type="text" id="osPart" class="scanned-input" autocomplete="off" inputmode="text" placeholder="バーコード読取／品番を手入力" oninput="osRefresh()"></label>
+      <!-- 日報入力の「バーコードを読み取る」と同じ入力（デモ中のパソコンはここで入れる） -->
+      <div class="os-scan">
+        <button type="button" class="btn-scan" onclick="osOpenScanner()"><span class="cam">📷</span>バーコードを読み取る</button>
+        <label class="btn-scan-photo">
+          <span class="cam">🖼️</span>写真で読み取る（うまく読めない時）
+          <input type="file" accept="image/*" capture="environment" id="osPhoto" onchange="osDecodePhoto(event)" style="display:none">
+        </label>
+        <div class="coil-row">
+          <span class="coil-lab">📄 過去の品番</span>
+          <select id="osHistory" class="coil-select" onchange="osPickHistory()"></select>
+        </div>
+        <div class="coil-row">
+          <span class="coil-lab">🧵 コイル</span>
+          <select id="osCoil" class="coil-select" onchange="osCoilChanged()"></select>
+        </div>
+        <div class="rpm-row">
+          <label>回転数/分<input type="number" id="osSpm" inputmode="numeric" placeholder="例 60" oninput="osSpeedInput()"></label>
+          <label>何回転で1個<input type="number" id="osSpp" inputmode="numeric" placeholder="例 1" oninput="osSpeedInput()"></label>
+        </div>
+      </div>
       <div class="of2">
         <label>数量（個）<input type="number" id="osQty" class="of-in mono" inputmode="numeric" placeholder="例 10000" oninput="osRefresh()"></label>
         <label>納期<input type="date" id="osDue" class="of-in mono" oninput="osRefresh()"></label>
-      </div>
-      <label>コイル（同じコイルの機械のプールに出ます）<select id="osCoil" class="of-in" onchange="osCoilChanged()"></select></label>
-      <div class="of2" id="osSpeedRow" hidden>
-        <label>回転数/分<input type="number" id="osSpm" class="of-in mono" inputmode="numeric" oninput="osRefresh()"></label>
-        <label>何回転で1個<input type="number" id="osSpp" class="of-in mono" inputmode="numeric" oninput="osRefresh()"></label>
       </div>
       <div class="of2" id="osSched" hidden>
         <label>機械<select id="osMach" class="of-in" onchange="osRefresh()"></select></label>
@@ -1595,7 +1615,9 @@ function parseScan(raw){
   }
   return out;
 }
+let scanTarget = null;   // 'order'＝読み取った品番を「注文を追加」の画面へ入れる
 function applyScan(raw){
+  if(scanTarget==='order'){ scanTarget = null; osApplyPart(parseScan(raw).partNo); return; }
   scan = parseScan(raw);
   $('#scannedBox').value = scan.partNo;
   renderScanned();
@@ -1774,7 +1796,12 @@ function renderStatus(){
   // 予定に次の注文があれば、それを先に出す（終了したらそのまま次を開始できる）
   let nx = null;
   try{ nx = selectedMachineId ? nextOrderFor(selectedMachineId) : null; }catch(e){ console.warn('nextOrder', e); }
-  const generic = (nx && !scan.partNo)
+  const scanOff = PLAN_DEMO && isPC;   // デモ中のパソコンは品番を予定（注文）から入れる
+  const generic = scanOff
+    ? (nx ? '' : `<div class="idle-msg">${selectedMachineId
+        ? `<span class="em">📅</span>${esc(selectedMachineId)} の次の予定がありません<div class="lock-hint">予定タブで注文を追加して、この機械の予定に入れてください</div>`
+        : '<span class="em">🏭</span>機械を選んでください'}</div>`)
+    : (nx && !scan.partNo)
     ? '<div class="lock-hint">別の品番で始めるときは、バーコードを読み取ってください</div>'
     : `<div class="idle-msg">${msg}</div>
         <button class="btn-big btn-start" id="startBtn" ${ready?'':'disabled'} onclick="startJob()"><span class="ic">▶</span>開始</button>
@@ -2496,6 +2523,7 @@ async function decodePhoto(ev){
     toast('読み取れませんでした。バーコードを大きく・正面・ピントを合わせて撮ってください','error');
   }finally{
     if(url) URL.revokeObjectURL(url);
+    scanTarget = null;
   }
 }
 let scanCanvas = null, scanCtx = null, zxLoopReader = null;
@@ -2587,6 +2615,7 @@ function onDetected(text){
 }
 function closeScanner(){
   scanning = false;
+  scanTarget = null;
   if(rafId){ cancelAnimationFrame(rafId); rafId=null; }
   if(zxingReader){ try{ zxingReader.reset(); }catch(e){} zxingReader=null; }
   if(scanStream){ scanStream.getTracks().forEach(t=>t.stop()); scanStream=null; }
@@ -3499,6 +3528,10 @@ document.body.classList.toggle('can-drag', canDrag);
 // 予定タブはパソコンだけに出す（マウスで操作できる端末。スマホ・タブレットには出さない）
 const isPC = !!(window.matchMedia && matchMedia('(hover:hover) and (pointer:fine)').matches);
 document.body.classList.toggle('is-pc', isPC);
+// デモ中のパソコン：日報入力の「バーコードを読み取る」は外し、「注文を追加」で入れる（スマホはそのまま）
+if(PLAN_DEMO && isPC){
+  $('#stepScan').hidden = true; $('#stepScanNote').hidden = false; $('#stepStartNum').textContent = '2';
+}
 // デモ：見本の注文を入れる（実際に作ったことのある品番で、今日からの納期にする）
 function planDemoSample(){
   const today = new Date(); today.setHours(0,0,0,0);
@@ -3533,7 +3566,7 @@ let planDirty = false;            // ドラッグ中に来た再描画を後回�
 let planFirst = 0, planN = 30;    // 表示中の月（1日の番号・日数）
 let planWorkMemo = {};            // 「動く日か」のメモ（描画1回ぶん）
 let planScrollToday = true;       // 次の描画で今日の列までスクロールする
-let osId = null, osCoilTouched = false;
+let osId = null, osCoilTouched = false, osSpeedTouched = false;
 
 function dayNum(k){ const [y,m,d]=String(k).split('-').map(Number); return Math.round(Date.UTC(y,m-1,d)/86400000); }
 function numDate(n){ const u=new Date(n*86400000); return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate()); }
@@ -3641,6 +3674,7 @@ function planStats(){
 }
 // 理論値（回転数÷何回転で1個）の出どころ：この機械の記録 → 他の機械の記録 → 自動記録の設定 → 注文に入れた値
 function planTheory(machineId, partNo, o){
+  if(o && o.spm>0 && o.spp>0) return { spm:o.spm, spp:o.spp, src:'order' };   // 注文に入れた回転数を優先
   let best = null, any = null;
   store.records.forEach(r=>{
     if((r.partNo||'').trim() !== partNo || !(r.spm>0 && r.spp>0)) return;
@@ -3651,7 +3685,6 @@ function planTheory(machineId, partNo, o){
   if(best || any) return best || any;
   const m = store.machines.find(x=>x.id===machineId);
   if(m && m.auto && (m.auto.partNo||'') === partNo && m.auto.spm>0 && m.auto.spp>0) return { spm:m.auto.spm, spp:m.auto.spp };
-  if(o && o.spm>0 && o.spp>0) return { spm:o.spm, spp:o.spp, src:'order' };
   return null;
 }
 // 速さ：実績（その品番だけを作った日の 個数÷動いていた分）。5日未満なら理論値×稼働90%
@@ -3976,9 +4009,9 @@ function startFromOrder(id){
   $('#scannedBox').value = o.partNo;
   const coil = o.coilId || (prev && prev.coilId) || null;
   if(coil && store.coils.some(c=>c.id===coil)) selectedCoilId = coil;
-  const th = planTheory(m, o.partNo, o);
-  $('#spmInput').value = (prev && prev.spm) || (th && th.spm) || '';
-  $('#sppInput').value = (prev && prev.spp) || (th && th.spp) || '';
+  const th = planTheory(m, o.partNo, o);   // 注文に入れた回転数 → この機械の前回 → 他の機械の前回
+  $('#spmInput').value = (th && th.spm) || (prev && prev.spm) || '';
+  $('#sppInput').value = (th && th.spp) || (prev && prev.spp) || '';
   startJob(o.id);
 }
 
@@ -4088,11 +4121,19 @@ function openOrderSheet(id){
   const o = id ? store.orders.find(x=>x.id===id) : null;
   osId = o ? o.id : null;
   osCoilTouched = !!o;
+  osSpeedTouched = !!(o && (o.spm || o.spp));
   $('#osTitle').textContent = o ? '注文の編集' : '注文を追加';
-  const parts = new Set();
-  store.records.forEach(r=>{ const p=(r.partNo||'').trim(); if(p) parts.add(p); });
-  store.orders.forEach(x=>{ if(x.partNo) parts.add(x.partNo); });
-  $('#osPartList').innerHTML = [...parts].map(p=>`<option value="${esc(p)}"></option>`).join('');
+  // 過去の品番（全部の機械・新しい順）。選ぶとコイル・回転数も呼び出す
+  const seen = new Map();
+  store.records.forEach(r=>{
+    const p = (r.partNo||'').trim(); if(!p) return;
+    const t = new Date(r.startTime).getTime(), cur = seen.get(p);
+    if(!cur || cur.t < t) seen.set(p, { t, m:r.machineId });
+  });
+  store.orders.forEach(x=>{ if(x.partNo && !seen.has(x.partNo)) seen.set(x.partNo, { t:0, m:'' }); });
+  $('#osHistory').innerHTML = '<option value="">（過去の品番から選ぶ）</option>' +
+    [...seen.entries()].sort((a,b)=> b[1].t - a[1].t).map(([p,x])=>`<option value="${esc(p)}">${esc(p)}${x.t ? '　' + esc(x.m) + ' ' + fmtMD(x.t) : ''}</option>`).join('');
+  $('#osHistory').value = o && seen.has(o.partNo) ? o.partNo : '';
   $('#osPart').value = o ? o.partNo : '';
   $('#osQty').value = o ? o.qty : '';
   $('#osDue').value = o ? o.due : '';
@@ -4113,6 +4154,23 @@ function openOrderSheet(id){
 }
 function closeOrderSheet(){ $('#orderSheet').classList.remove('active'); osId = null; }
 function osCoilChanged(){ osCoilTouched = true; osRefresh(); }
+function osSpeedInput(){ osSpeedTouched = true; osRefresh(); }
+// 品番が決まったら（読み取り・過去の品番）、コイルと回転数を前回の内容で入れ直す
+function osApplyPart(p){
+  p = String(p||'').trim(); if(!p) return;
+  $('#osPart').value = p;
+  osCoilTouched = false; osSpeedTouched = false;
+  const h = $('#osHistory'); h.value = [...h.options].some(x=>x.value===p) ? p : '';
+  osRefresh();
+  const got = [];
+  const c = store.coils.find(x=>x.id===$('#osCoil').value); if(c) got.push('コイル ' + c.name);
+  if($('#osSpm').value) got.push($('#osSpm').value + '回転/分');
+  if($('#osSpp').value) got.push($('#osSpp').value + '回転で1個');
+  toast(got.length ? p + ' ／ ' + got.join('・') + ' を呼び出しました' : '品番 ' + p + ' を入れました', 'success');
+}
+function osPickHistory(){ const v = $('#osHistory').value; if(v) osApplyPart(v); }
+function osOpenScanner(){ scanTarget = 'order'; openScanner(); }
+function osDecodePhoto(ev){ scanTarget = 'order'; decodePhoto(ev); }
 // 入力に合わせて、目標時間・開始期限をその場で計算して見せる
 function osRefresh(){
   planWorkMemo = {};
@@ -4121,16 +4179,18 @@ function osRefresh(){
   const o0 = osId ? store.orders.find(x=>x.id===osId) : null;
   const sched = !$('#osSched').hidden;
   const mId = sched ? $('#osMach').value : planMachine;
+  if(!osSpeedTouched){   // 回転数も品番の履歴から自動（手で直したらそのまま）
+    const th = part ? planTheory(mId || '', part, null) : null;
+    $('#osSpm').value = th ? th.spm : ''; $('#osSpp').value = th ? th.spp : '';
+  }
   const tmp = { id:osId||'_new', partNo:part, qty:parseInt($('#osQty').value)||0, due:$('#osDue').value,
     spm:parseInt($('#osSpm').value)||null, spp:parseInt($('#osSpp').value)||null, coilId:$('#osCoil').value||null };
   const calc = $('#osCalc');
   if(!part || !mId){
-    $('#osSpeedRow').hidden = true;
     calc.innerHTML = '品番・数量・納期を入れると、目標時間と「いつまでに始めればいいか」を計算します。';
     return;
   }
   const sp = planSpeed(mId, part, tmp);
-  $('#osSpeedRow').hidden = sp.ok && !(sp.th && sp.th.src==='order');   // 速さが分からない品番だけ回転数の欄を出す
   if(!sp.ok){ calc.innerHTML = '⚠ この品番は速さが分かりません。<b>回転数/分</b> と <b>何回転で1個</b> を入れると計算できます。'; return; }
   let h = `${esc(mId)} で <b>${sp.rate.toFixed(2)}個/分</b>（${esc(sp.basis)}）`;
   if(tmp.qty > 0){
@@ -4220,7 +4280,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.31';
+const APP_VERSION = '2026-06-28.32';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
