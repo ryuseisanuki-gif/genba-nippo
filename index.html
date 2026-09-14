@@ -251,6 +251,14 @@
   .btn-end-sm{background:var(--ink);}
   .btn-end-sm:active{background:#0d1620;}
   .lock-hint{font-size:12px;color:var(--ink3);text-align:center;margin-top:9px;}
+  /* 待機中に出す「次の予定」 */
+  .next-plan{background:var(--run-bg);border:1.5px solid #bfe3cb;border-radius:13px;padding:12px 14px 14px;margin-bottom:10px;text-align:left;}
+  .next-plan .np-h{font-size:12px;font-weight:800;color:var(--run-d);letter-spacing:.03em;}
+  .next-plan .np-part{font-family:var(--mono);font-size:20px;font-weight:800;color:var(--ink);margin-top:2px;word-break:break-all;}
+  .next-plan .np-sub{font-size:13px;color:var(--ink2);font-weight:600;margin:3px 0 11px;line-height:1.6;}
+  .next-plan .np-sub b{color:var(--ink);}
+  .next-plan .np-late{color:var(--stop-d);font-weight:800;}
+  .next-plan .np-note{font-size:11.5px;color:var(--ink3);text-align:center;margin-top:8px;font-weight:600;}
 
   /* ── Records ── */
   .rec-bar{display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;}
@@ -697,6 +705,7 @@
   .g-bar.late{background:var(--stop-bg);border:1.5px solid var(--stop);color:var(--stop-d);}
   .g-bar.unk{background:var(--surface2);border:1.5px dashed var(--ink3);color:var(--ink2);}
   .g-bar.past{opacity:.55;}
+  .g-bar.running{box-shadow:inset 0 0 0 1px var(--run);background:repeating-linear-gradient(135deg,#d9f0e1,#d9f0e1 6px,#eaf6ee 6px,#eaf6ee 12px);}   /* 作業中の予定 */
   .g-bar[draggable=true]{cursor:grab;}
   .g-bar:hover{filter:brightness(.97);}
   .g-track.over{background:rgba(26,111,196,.05);}
@@ -1762,13 +1771,20 @@ function renderStatus(){
   else if(!scan.partNo)  msg = '<span class="em">📷</span>バーコードを読み取ってください';
   else msg = `<span class="em">✅</span>${esc(selectedMachineId)} / ${esc(scan.partNo)} 開始できます`;
 
+  // 予定に次の注文があれば、それを先に出す（終了したらそのまま次を開始できる）
+  let nx = null;
+  try{ nx = selectedMachineId ? nextOrderFor(selectedMachineId) : null; }catch(e){ console.warn('nextOrder', e); }
+  const generic = (nx && !scan.partNo)
+    ? '<div class="lock-hint">別の品番で始めるときは、バーコードを読み取ってください</div>'
+    : `<div class="idle-msg">${msg}</div>
+        <button class="btn-big btn-start" id="startBtn" ${ready?'':'disabled'} onclick="startJob()"><span class="ic">▶</span>開始</button>
+        ${!ready?'<div class="lock-hint">機械の選択とバーコード読み取りで開始できます</div>':''}`;
   panel.innerHTML = `
     <div class="status idle">
       <div class="st-strip">待機中</div>
       <div class="st-body">
-        <div class="idle-msg">${msg}</div>
-        <button class="btn-big btn-start" id="startBtn" ${ready?'':'disabled'} onclick="startJob()"><span class="ic">▶</span>開始</button>
-        ${!ready?'<div class="lock-hint">機械の選択とバーコード読み取りで開始できます</div>':''}
+        ${nx ? planNextCard(nx) : ''}
+        ${generic}
       </div>
     </div>`;
 }
@@ -1822,11 +1838,11 @@ function tickTimer(){
 }
 
 /* ===== START / END ===== */
-function startJob(){
+function startJob(orderId){
   if(!selectedMachineId){ toast('機械を選んでください','error'); return; }
   if(!scan.partNo){ toast('バーコードを読み取ってください','error'); return; }
   if(activeFor(selectedMachineId)){ toast('この機械は作業中です','error'); return; }
-  store.records.push({
+  const rec = {
     id: uid(),
     machineId: selectedMachineId,
     partNo: scan.partNo,
@@ -1846,9 +1862,12 @@ function startJob(){
     spm: parseInt($('#spmInput').value)||null,
     spp: parseInt($('#sppInput').value)||null,
     status: 'running'
-  });
+  };
+  store.records.push(rec);
+  let linked = null;
+  try{ linked = planLinkStart(rec, orderId); }catch(e){ console.warn('planLinkStart', e); }   // 予定とつなぐ
   save();
-  toast('作業を開始しました','success');
+  toast(linked ? `${linked.o.partNo} の予定で開始しました${linked.earlier ? '（予定を前にずらしました）' : ''}` : '作業を開始しました','success');
   renderMachineGrid();
   renderStatus();
   renderCoilSelect();
@@ -2294,6 +2313,7 @@ function submitCarry(action){
     r.status = 'done';
     r.lastRunEnd = null;
     delete r.overnightDate;
+    planAutoDone();                 // この作業の注文は完了に
   }
   save();
   $('#carrySheet').classList.remove('active');
@@ -2412,14 +2432,21 @@ function confirmEnd(){
   r.note = $('#endNote').value.trim();
   r.status = 'done';
   delete r.overnightDate; r.pendingCount = false;
+  planAutoDone();                   // この作業の注文は完了に
   save();
   closeEndSheet();
-  toast('日報を記録しました','success');
   scan = {raw:'',partNo:'',partName:'',qty:'',due:''};
   $('#scannedBox').value = '';
   renderScanned();
   renderMachineGrid();
   renderStatus();
+  // 次の予定があれば待機中の画面に出ているので、そこへ案内する
+  let nx = null;
+  try{ nx = nextOrderFor(r.machineId); }catch(e){}
+  if(nx && selectedMachineId===r.machineId){
+    toast('日報を記録しました — 次の予定を表示しています','success');
+    try{ $('#statusPanel').scrollIntoView({ behavior:'smooth', block:'center' }); }catch(e){}
+  } else toast('日報を記録しました','success');
 }
 
 /* ===== SCANNER ===== */
@@ -3657,10 +3684,12 @@ function planLayout(machineId, override){
   if(override && override.machineId===machineId) list.push(override);
   list.sort((a,b)=> a.start!==b.start ? (a.start<b.start ? -1 : 1) : ((a.startFrac||0)-(b.startFrac||0)) || ((b.seq||0)-(a.seq||0)));
   let cur = null; const out = [];
+  const nowP = planTodayPos(machineId);
   list.forEach(o=>{
     const c = orderCalc(o, machineId);
     let p = { d:dayNum(o.start), f:o.startFrac||0 };
     if(cur && posCmp(cur, p) > 0) p = cur;
+    if(!o.startedAt && posCmp(nowP, p) > 0) p = nowP;   // まだ始めていない予定は「今」より前には置かない（遅れたら後ろへずれる）
     p = posNorm(p, machineId);
     const a = posAdvance(p, c.ok ? c.need : 1, machineId);   // 速さ不明は1日で仮置き
     cur = a.end;
@@ -3670,9 +3699,12 @@ function planLayout(machineId, override){
 }
 // 今から入れられる最初の位置（終業後なら翌日から）
 function planTodayPos(machineId){
-  const now = new Date(); let d = dayNum(dateKey(now));
-  if(now.getTime() >= stdEnd(now).getTime()) d++;
-  return posNorm({ d, f:0 }, machineId);
+  const now = new Date(), t = now.getTime();
+  const ws = stdStart(now).getTime(), we = stdEnd(now).getTime();
+  let d = dayNum(dateKey(now)), f = 0;
+  if(t >= we) d++;
+  else if(t > ws) f = Math.min(0.999, (t - ws) / (we - ws));   // 今日はもう進んだ分から
+  return posNorm({ d, f }, machineId);
 }
 // 機械の空き＝最後の予定が終わる位置（今日より前なら今日）
 function planFree(machineId, lay){
@@ -3750,6 +3782,7 @@ function renderPlan(){
   if(planDrag){ planDirty = true; return; }   // ドラッグ中に描き直すとドラッグが切れる
   if(!$('#page-plan')) return;
   $('#planDemo').hidden = !PLAN_DEMO;
+  if(planAutoDone()) save();   // 終わった作業の注文は完了に
   planWorkMemo = {};
   const ms = store.machines;
   if(!planMachine || !ms.some(m=>m.id===planMachine)){
@@ -3797,12 +3830,12 @@ function renderPlan(){
 function planBarHtml(x, todayN){
   const l = Math.max(0, x.s.d + x.s.f - planFirst), r = Math.min(planN, x.e.d + x.e.f - planFirst);
   if(r <= 0 || l >= planN || r <= l) return '';
-  const o = x.o, cls = !x.c.ok ? 'unk' : x.late ? 'late' : 'ok';
+  const o = x.o, cls = (!x.c.ok ? 'unk' : x.late ? 'late' : 'ok') + (o.startedAt ? ' running' : '');
   const tip = `${o.partNo}　${o.qty.toLocaleString()}個\n${numMDW(x.s.d)} 〜 ${numMDW(x.last)}\n納期 ${numMDW(dayNum(o.due))}${x.late?'（遅れる）':''}\n` +
     (x.c.ok ? `見込み${planFmtDays(x.c.need)}日（${x.c.sp.basis}）` : '速さ不明（1日で仮置き）');
   const drag = canDrag ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','bar')" ondragend="planDragEnd()"` : '';
   return `<div class="g-bar ${cls}${x.last < todayN ? ' past' : ''}" style="left:${l/planN*100}%;width:${(r-l)/planN*100}%" title="${esc(tip)}" onclick="openOrderSheet('${o.id}')"${drag}>` +
-    `<b>${esc(o.partNo)}</b><span>${o.qty.toLocaleString()}個</span><small>${x.late?'⚠遅れ ':''}納期${numMD(dayNum(o.due))}</small></div>`;
+    `<b>${o.startedAt?'▶ ':''}${esc(o.partNo)}</b><span>${o.qty.toLocaleString()}個</span><small>${x.late?'⚠遅れ ':''}納期${numMD(dayNum(o.due))}</small></div>`;
 }
 function renderPlanPool(){
   const el = $('#planPool'); if(!el) return;
@@ -3862,8 +3895,91 @@ function planPut(id){
 }
 function planToPool(id){
   const o = store.orders.find(x=>x.id===id); if(!o) return;
-  o.machineId = null; o.start = null; o.startFrac = 0;
+  o.machineId = null; o.start = null; o.startFrac = 0; o.startedAt = null; o.recId = null;
   save(); renderPlan(); toast('プールに戻しました');
+}
+
+/* ── 作業の終了→次の予定を開始（日報入力とつなぐ） ── */
+// 開始した注文は、その作業（記録）が終わったら完了にする
+function planAutoDone(){
+  let n = 0;
+  (store.orders||[]).forEach(o=>{
+    if(o.done || !o.startedAt || !o.recId) return;
+    const r = store.records.find(x=>x.id===o.recId);
+    if(r && r.status==='done'){ o.done = true; o.doneAt = r.endTime || new Date().toISOString(); o.doneQty = recordTotalQty(r); n++; }
+  });
+  return n;
+}
+// その機械の次の予定（まだ始めていない一番前の予定）
+function nextOrderFor(machineId){
+  if(!machineId || !store.orders || !store.orders.length) return null;
+  if(planAutoDone()) save();
+  planWorkMemo = {};
+  return planLayout(machineId).find(x=> !x.o.startedAt) || null;
+}
+// 開始した予定を「今」へ前倒し。すぐ後ろに続いていた予定（間が空いていないもの）も一緒に前へずらす
+function planPullForward(o, machineId){
+  planWorkMemo = {};
+  const lay = planLayout(machineId);
+  const i = lay.findIndex(x=>x.o.id===o.id);
+  const now = planTodayPos(machineId);
+  const chain = [];
+  if(i >= 0){
+    for(let k=i+1; k<lay.length; k++){
+      if(lay[k].o.startedAt || posCmp(lay[k].s, posNorm(lay[k-1].e, machineId)) > 1e-6) break;
+      chain.push(lay[k].o);
+    }
+  }
+  const earlier = i >= 0 && posCmp(lay[i].s, now) > 0.05;
+  o.machineId = machineId; o.start = numKey(now.d); o.startFrac = now.f; o.seq = Date.now();
+  chain.forEach((y, n)=>{ y.start = o.start; y.startFrac = now.f + (n+1)*1e-6; });   // 並び順はそのまま
+  return earlier;
+}
+// 作業を開始したら、次の予定（または指定の注文）と記録をつなぐ
+function planLinkStart(rec, orderId){
+  if(!store.orders || !store.orders.length) return null;
+  const m = rec.machineId, nowIso = new Date().toISOString();
+  // この機械で「開始済みのまま」の注文は、機械が空いていた＝作業は終わっているので完了にする
+  store.orders.forEach(o=>{
+    if(o.done || !o.startedAt || o.machineId!==m || o.recId===rec.id) return;
+    const r = store.records.find(x=>x.id===o.recId);
+    if(!r || r.status==='done'){ o.done = true; o.doneAt = nowIso; }
+  });
+  let o = orderId ? store.orders.find(x=> x.id===orderId && validOrder(x) && !x.done) : null;
+  if(!o){ const nx = nextOrderFor(m); if(nx && nx.o.partNo === (rec.partNo||'').trim()) o = nx.o; }   // 次の予定と同じ品番を読み取って開始した時もつなぐ
+  if(!o) return null;
+  const earlier = planPullForward(o, m);
+  o.startedAt = rec.startTime; o.recId = rec.id; rec.orderId = o.id;
+  return { o, earlier };
+}
+// 待機中の画面に出す「次の予定」
+function planNextCard(nx){
+  const o = nx.o, nowP = planTodayPos(o.machineId);
+  const early = nx.s.d > nowP.d;
+  return `<div class="next-plan">
+    <div class="np-h">📅 次の予定</div>
+    <div class="np-part">${esc(o.partNo)}</div>
+    <div class="np-sub">${o.qty.toLocaleString()}個 ・ 納期 <b>${numMDW(dayNum(o.due))}</b><br>予定 ${numMDW(nx.s.d)}〜${numMDW(nx.last)}${nx.c.ok ? `（見込み${planFmtDays(nx.c.need)}日）` : ''}${nx.late ? ' <span class="np-late">納期に遅れる見込み</span>' : ''}</div>
+    <button class="btn-big btn-start" onclick="startFromOrder('${o.id}')"><span class="ic">▶</span>この予定で開始</button>
+    ${early ? '<div class="np-note">予定より早く始めると、予定表が前にずれます</div>' : ''}
+  </div>`;
+}
+// 「この予定で開始」：品番・コイル・回転数を入れて、そのまま開始する
+function startFromOrder(id){
+  const o = store.orders.find(x=>x.id===id);
+  if(!o || !selectedMachineId) return;
+  const m = selectedMachineId;
+  if(activeFor(m)){ toast('この機械は作業中です','error'); return; }
+  let prev = lastRecordOf(m, o.partNo);
+  if(!prev) store.records.forEach(r=>{ if((r.partNo||'').trim()===o.partNo && (!prev || new Date(r.startTime) > new Date(prev.startTime))) prev = r; });
+  scan = { raw:o.partNo, partNo:o.partNo, partName:(prev && prev.partName) || '', qty:'', due:o.due || '' };
+  $('#scannedBox').value = o.partNo;
+  const coil = o.coilId || (prev && prev.coilId) || null;
+  if(coil && store.coils.some(c=>c.id===coil)) selectedCoilId = coil;
+  const th = planTheory(m, o.partNo, o);
+  $('#spmInput').value = (prev && prev.spm) || (th && th.spm) || '';
+  $('#sppInput').value = (prev && prev.spp) || (th && th.spp) || '';
+  startJob(o.id);
 }
 
 /* ── PC：ドラッグで予定に入れる／動かす／プールに戻す ── */
@@ -4104,7 +4220,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.30';
+const APP_VERSION = '2026-06-28.31';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
