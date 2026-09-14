@@ -657,6 +657,13 @@
   [hidden]{display:none!important;}
 
   /* ── 予定（機械ごとの予定表＋プール） ── */
+  .tab[data-tab=plan]{display:none;}             /* パソコンだけに出す */
+  body.is-pc .tab[data-tab=plan]{display:block;}
+  .plan-demo{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;background:#eef4fc;border:1px solid #bcd3ef;border-radius:11px;
+    padding:10px 13px;margin-bottom:11px;font-size:12.5px;color:#23538a;font-weight:600;line-height:1.55;}
+  .plan-demo span{flex:1;min-width:240px;}
+  .plan-demo button{padding:8px 13px;border-radius:9px;border:1px solid #bcd3ef;background:#fff;color:#23538a;font-size:12.5px;font-weight:700;}
+  .plan-demo button:active{background:#e3edf9;}
   .gantt-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;background:var(--surface);border:1px solid var(--line);border-radius:14px;margin-bottom:9px;}
   .gantt{min-width:calc(76px + var(--n)*26px);}
   .g-row{display:flex;border-top:1px solid var(--line);}
@@ -870,6 +877,11 @@
 
 <!-- ===== PLAN（予定） ===== -->
 <section class="page wide" id="page-plan">
+  <div class="plan-demo" id="planDemo">
+    <span>🧪 <b>デモ中</b>：ここで入れた注文はこのパソコンだけに保存され、他の端末やスマホには送られません。日報の記録は変わりません。</span>
+    <button onclick="planDemoSample()">見本の注文を入れる</button>
+    <button onclick="planDemoClear()">デモを全部消す</button>
+  </div>
   <div class="day-nav">
     <button class="day-arrow" onclick="planMonthMove(-1)">◀</button>
     <div class="day-label" id="planLabel" onclick="planThisMonth()">—</div>
@@ -1147,6 +1159,10 @@ const $ = s => document.querySelector(s);
 /* ===== STORE ===== */
 let store = { machines: [], records: [], coils: [], shutdowns: [], workdays: [], orders: [] };
 const KEY = 'genbaNippoData_v1';
+// 予定タブはデモ中：注文はこの端末（パソコン）だけに保存し、サーバーにも他の端末にも送らない。
+// 本番で使い始める時は false にする（注文が orders コレクションで全端末に同期される）。
+const PLAN_DEMO = true;
+const PLAN_DEMO_KEY = 'genbaPlanDemo_v1';
 
 function load(){
   try{ const s = localStorage.getItem(KEY); if(s) store = JSON.parse(s); }catch(e){}
@@ -1156,6 +1172,10 @@ function load(){
   if(!Array.isArray(store.shutdowns)) store.shutdowns = [];
   if(!Array.isArray(store.workdays)) store.workdays = [];   // 土日祝でも稼働する日
   if(!Array.isArray(store.orders)) store.orders = [];       // 注文（予定タブ）
+  if(PLAN_DEMO){   // デモ中の注文は別の保存場所から読む
+    try{ const s = localStorage.getItem(PLAN_DEMO_KEY); store.orders = s ? JSON.parse(s) : []; }catch(e){ store.orders = []; }
+    if(!Array.isArray(store.orders)) store.orders = [];
+  }
   store.records.forEach(r=>{
     if(!Array.isArray(r.stops)) r.stops = [];
     if(!('lastRunEnd' in r)) r.lastRunEnd = null;
@@ -1172,7 +1192,13 @@ function load(){
   });
   // 既定機械の自動生成は廃止（削除しても復活しないように）。機械は設定タブで登録する。
 }
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){} if(initialSyncDone) syncPush(); }
+// 日報の保存にはデモの注文を混ぜない（本番に切り替えた時に勝手に送られないように）
+function storeJson(){ return PLAN_DEMO ? JSON.stringify(Object.assign({}, store, { orders: undefined })) : JSON.stringify(store); }
+function save(){
+  try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
+  if(PLAN_DEMO){ try{ localStorage.setItem(PLAN_DEMO_KEY, JSON.stringify(store.orders||[])); }catch(e){} }
+  if(initialSyncDone) syncPush();
+}
 
 /* ===== CLOUD SYNC (Firebase Firestore + 匿名認証 / localStorage はオフライン用に併用) ===== */
 const firebaseConfig = {
@@ -1293,7 +1319,7 @@ function attachListeners(){
   db.collection('coils').onSnapshot(s=>applySnap('coils', s), e=>{ console.warn('coils listen', e); setSyncStatus('offline'); });
   db.collection('shutdowns').onSnapshot(s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
   db.collection('workdays').onSnapshot(s=>applySnap('workdays', s), e=>{ console.warn('workdays listen', e); setSyncStatus('offline'); });
-  db.collection('orders').onSnapshot(s=>applySnap('orders', s), e=>console.warn('orders listen', e));
+  if(!PLAN_DEMO) db.collection('orders').onSnapshot(s=>applySnap('orders', s), e=>console.warn('orders listen', e));
 }
 // いま見ている機械の状態を1つの文字列にしたもの（他端末の操作を検知するのに使う）
 function machineStateKey(id){
@@ -1311,13 +1337,13 @@ function applySnap(kind, snap){
     if(ch.type==='removed'){ if(i>=0) arr.splice(i,1); delete lastSynced[kind+'/'+id]; }
     else { if(i>=0) arr[i] = data; else arr.push(data); lastSynced[kind+'/'+id] = JSON.stringify(data); }
   });
-  try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){}
+  try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
   firstSnap[kind] = true;
   if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns && firstSnap.workdays){
     initialSyncDone = true;
     enableAutoCreate();   // 全端末のデータが揃ってから自動記録を作る（二重作成の防止）
     syncPush();           // 先に未送信ぶんをサーバーへ送り切る
-    if(pruneOldRecords()){ try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){} }  // その後で古い分を手放す
+    if(pruneOldRecords()){ try{ localStorage.setItem(KEY, storeJson()); }catch(e){} }  // その後で古い分を手放す
   }
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
@@ -1342,7 +1368,7 @@ function syncPush(){
   store.coils.forEach(c=> cur['coils/'+c.id] = c);
   store.shutdowns.forEach(sd=> cur['shutdowns/'+sd.id] = sd);
   (store.workdays||[]).forEach(w=> cur['workdays/'+w.id] = w);
-  (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);
+  if(!PLAN_DEMO) (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);   // デモ中は送らない
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -3443,6 +3469,36 @@ const PLAN_MIN_DAYS = 5;          // 記録がこの日数未満の品番は理�
 const PLAN_THEO_RATE = 0.9;       // 理論値のときの1日の稼働（90%）
 const canDrag = !!(window.matchMedia && matchMedia('(pointer:fine)').matches);   // マウスのある端末（PC）だけドラッグ
 document.body.classList.toggle('can-drag', canDrag);
+// 予定タブはパソコンだけに出す（マウスで操作できる端末。スマホ・タブレットには出さない）
+const isPC = !!(window.matchMedia && matchMedia('(hover:hover) and (pointer:fine)').matches);
+document.body.classList.toggle('is-pc', isPC);
+// デモ：見本の注文を入れる（実際に作ったことのある品番で、今日からの納期にする）
+function planDemoSample(){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const plus = n => { const d = new Date(today); d.setDate(d.getDate()+n); return dateKey(d); };
+  const seen = new Map();
+  store.records.forEach(r=>{ const p=(r.partNo||'').trim(); if(p) seen.set(p, (seen.get(p)||0)+1); });
+  const parts = [...seen.entries()].sort((a,b)=>b[1]-a[1]).map(x=>x[0]);
+  const plan = [[10000,45],[4000,10],[3500,18],[2000,25],[1500,30]];
+  const made = plan.map(([qty, dueIn], i)=>{
+    const p = parts[i] || ('DEMO-' + String(i+1).padStart(3,'0'));
+    return { id:'o'+Date.now().toString(36)+i+Math.random().toString(36).slice(2,5), partNo:p, qty, due:plus(dueIn),
+      coilId:lastCoilOf(p), spm: parts[i] ? null : 55, spp: parts[i] ? null : 20,
+      machineId:null, start:null, startFrac:0, seq:0, done:false, createdAt:new Date().toISOString() };
+  });
+  store.orders.push(...made);
+  // 1件だけ予定に入れておく（バーの見え方の見本）
+  if(planMachine){ planWorkMemo = {}; const f = planSlot(made[0], planMachine); Object.assign(made[0], { machineId:planMachine, start:numKey(f.d), startFrac:f.f, seq:Date.now() }); }
+  save(); renderPlan();
+  toast('見本の注文を5件入れました（このパソコンだけ）', 'success');
+}
+async function planDemoClear(){
+  if(!store.orders.length){ toast('デモの注文はありません'); return; }
+  const ok = await confirmDialog('デモを全部消す', `デモの注文 ${store.orders.length}件 をすべて消します（日報の記録は消えません）。`, '全部消す', true);
+  if(!ok) return;
+  store.orders = [];
+  save(); renderPlan(); toast('デモの注文を消しました');
+}
 let planMonth = (()=>{ const d=new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
 let planMachine = null;           // プールを見ている機械
 let planDrag = null;              // ドラッグ中 { id, from:'pool'|'bar', key, tip }
@@ -3693,6 +3749,7 @@ function lastCoilOf(partNo){
 function renderPlan(){
   if(planDrag){ planDirty = true; return; }   // ドラッグ中に描き直すとドラッグが切れる
   if(!$('#page-plan')) return;
+  $('#planDemo').hidden = !PLAN_DEMO;
   planWorkMemo = {};
   const ms = store.machines;
   if(!planMachine || !ms.some(m=>m.id===planMachine)){
@@ -4016,7 +4073,7 @@ async function osDelete(){
   const ok = await confirmDialog('注文の削除', `${o.partNo}（${o.qty.toLocaleString()}個）の注文を削除します。`, '削除する', true);
   if(!ok) return;
   store.orders = store.orders.filter(x=>x.id!==o.id);
-  delDoc('orders', o.id);
+  if(!PLAN_DEMO) delDoc('orders', o.id);
   save(); renderPlan(); toast('削除しました');
 }
 
@@ -4047,7 +4104,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.29';
+const APP_VERSION = '2026-06-28.30';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
