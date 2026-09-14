@@ -672,6 +672,10 @@
   .plan-demo span{flex:1;min-width:240px;}
   .plan-demo button{padding:8px 13px;border-radius:9px;border:1px solid #bcd3ef;background:#fff;color:#23538a;font-size:12.5px;font-weight:700;}
   .plan-demo button:active{background:#e3edf9;}
+  .plan-todo{display:flex;align-items:center;gap:7px 9px;flex-wrap:wrap;background:var(--pause-bg);border:1px solid #ecd7a6;border-radius:11px;
+    padding:9px 12px;margin-bottom:10px;font-size:12.5px;font-weight:700;color:var(--pause-d);}
+  .plan-todo button{padding:7px 12px;border-radius:9px;border:1.5px dashed var(--pause);background:#fff;color:var(--pause-d);font-size:12.5px;font-weight:800;font-family:var(--mono);}
+  .plan-todo button:active{background:#fdf3e0;}
   .gantt-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;background:var(--surface);border:1px solid var(--line);border-radius:14px;margin-bottom:9px;}
   .gantt{min-width:calc(76px + var(--n)*26px);}
   .g-row{display:flex;border-top:1px solid var(--line);}
@@ -706,6 +710,8 @@
   .g-bar.unk{background:var(--surface2);border:1.5px dashed var(--ink3);color:var(--ink2);}
   .g-bar.past{opacity:.55;}
   .g-bar.running{box-shadow:inset 0 0 0 1px var(--run);background:repeating-linear-gradient(135deg,#d9f0e1,#d9f0e1 6px,#eaf6ee 6px,#eaf6ee 12px);}   /* 作業中の予定 */
+  .g-bar.tbd,.g-bar.tbd.running{border:1.5px dashed var(--pause);color:var(--pause-d);box-shadow:none;
+    background:repeating-linear-gradient(135deg,#fbe9c6,#fbe9c6 6px,#fdf3e0 6px,#fdf3e0 12px);}   /* 取り込んだ作業（数量・納期が未入力） */
   .g-bar[draggable=true]{cursor:grab;}
   .g-bar:hover{filter:brightness(.97);}
   .g-track.over{background:rgba(26,111,196,.05);}
@@ -894,6 +900,7 @@
 <section class="page wide" id="page-plan">
   <div class="plan-demo" id="planDemo">
     <span>🧪 <b>デモ中</b>：ここで入れた注文はこのパソコンだけに保存され、他の端末やスマホには送られません。日報の記録は変わりません。</span>
+    <button onclick="planImportCurrent()">今の作業を取り込む</button>
     <button onclick="planDemoSample()">見本の注文を入れる</button>
     <button onclick="planDemoClear()">デモを全部消す</button>
   </div>
@@ -903,6 +910,7 @@
     <button class="day-arrow" onclick="planMonthMove(1)">▶</button>
   </div>
   <div class="rec-chips" id="planMachChips"></div>
+  <div class="plan-todo" id="planTodo" hidden></div>
   <div class="gantt-wrap"><div id="planGantt"></div></div>
   <div class="plan-legend">
     <span><i class="ok"></i>納期に間に合う</span>
@@ -3552,6 +3560,37 @@ function planDemoSample(){
   save(); renderPlan();
   toast('見本の注文を5件入れました（このパソコンだけ）', 'success');
 }
+// デモ：今動いている作業（本物の記録）を「作業中」の注文として取り込む。数量・納期は後から入れる
+async function planImportCurrent(){
+  const acts = store.machines.map(m=>activeFor(m.id)).filter(Boolean);
+  if(!acts.length){ toast('今動いている作業はありません'); return; }
+  const list = acts.map(r=> r.machineId + '：' + (r.partNo||'（品番なし）')).join('、');
+  const ok = await confirmDialog('今の作業を取り込む',
+    `デモの注文（${store.orders.length}件）を消して、今動いている作業（${list}）を「作業中」として予定表に出します。取り込んだ後、バーを押して残りの数量と納期を入れてください。日報の記録は変わりません。`, '取り込む');
+  if(!ok) return;
+  store.orders = [];
+  const now = Date.now(), today = new Date(); today.setHours(0,0,0,0);
+  acts.forEach((r, i)=>{
+    // 前の日から続いている作業は、今日の始業から残りを作る扱いにする
+    let st = new Date(r.startTime);
+    if(st.getTime() < today.getTime()) st = stdStart(new Date());
+    const ws = stdStart(st).getTime(), we = stdEnd(st).getTime();
+    const f = Math.max(0, Math.min(0.999, (st.getTime() - ws) / (we - ws)));
+    const partNo = (r.partNo||'').trim() || '（品番なし）';
+    const o = { id:'o'+now.toString(36)+i+Math.random().toString(36).slice(2,5), partNo, qty:1, due:dateKey(new Date()),
+      coilId: r.coilId || lastCoilOf(partNo) || null, spm: r.spm || null, spp: r.spp || null,
+      machineId:r.machineId, start:dateKey(st), startFrac:f, seq:now+i, done:false, createdAt:new Date().toISOString(),
+      startedAt:r.startTime, recId:r.id, needsInput:true };
+    // 数量・納期を入れるまでは、仮に「1日分」で表示する
+    const c = orderCalc(Object.assign({}, o, { qty:1000 }), r.machineId);
+    if(c.ok) o.qty = Math.max(10, Math.round(c.sp.rate * c.sp.perDay / 10) * 10);
+    store.orders.push(o);
+  });
+  planWorkMemo = {};
+  store.orders.forEach(o=>{ const x = planLayout(o.machineId).find(y=>y.o.id===o.id); if(x) o.due = numKey(x.last); });
+  save(); planScrollToday = true; renderPlan();
+  toast(`${acts.length}台の作業を取り込みました。バーを押して残りの数量と納期を入れてください`, 'success');
+}
 async function planDemoClear(){
   if(!store.orders.length){ toast('デモの注文はありません'); return; }
   const ok = await confirmDialog('デモを全部消す', `デモの注文 ${store.orders.length}件 をすべて消します（日報の記録は消えません）。`, '全部消す', true);
@@ -3816,6 +3855,11 @@ function renderPlan(){
   if(!$('#page-plan')) return;
   $('#planDemo').hidden = !PLAN_DEMO;
   if(planAutoDone()) save();   // 終わった作業の注文は完了に
+  // 取り込んだ作業で、残りの数量・納期がまだの物（バーが細くて押しにくいので、ここからも入れられるように）
+  const todo = store.orders.filter(o=> o.needsInput && !o.done && validOrder(o));
+  $('#planTodo').hidden = !todo.length;
+  $('#planTodo').innerHTML = todo.length ? '✏️ 残りの数量と納期を入れてください：' +
+    todo.map(o=>`<button onclick="openOrderSheet('${o.id}')">${esc(o.machineId)}　${esc(o.partNo)}</button>`).join('') : '';
   planWorkMemo = {};
   const ms = store.machines;
   if(!planMachine || !ms.some(m=>m.id===planMachine)){
@@ -3863,12 +3907,14 @@ function renderPlan(){
 function planBarHtml(x, todayN){
   const l = Math.max(0, x.s.d + x.s.f - planFirst), r = Math.min(planN, x.e.d + x.e.f - planFirst);
   if(r <= 0 || l >= planN || r <= l) return '';
-  const o = x.o, cls = (!x.c.ok ? 'unk' : x.late ? 'late' : 'ok') + (o.startedAt ? ' running' : '');
-  const tip = `${o.partNo}　${o.qty.toLocaleString()}個\n${numMDW(x.s.d)} 〜 ${numMDW(x.last)}\n納期 ${numMDW(dayNum(o.due))}${x.late?'（遅れる）':''}\n` +
+  const o = x.o, cls = (o.needsInput ? 'tbd' : !x.c.ok ? 'unk' : x.late ? 'late' : 'ok') + (o.startedAt ? ' running' : '');
+  const tip = (o.needsInput ? '【残りの数量・納期が未入力（仮に1日分で表示）】\n' : '') + `${o.partNo}　${o.qty.toLocaleString()}個\n${numMDW(x.s.d)} 〜 ${numMDW(x.last)}\n納期 ${numMDW(dayNum(o.due))}${x.late?'（遅れる）':''}\n` +
     (x.c.ok ? `見込み${planFmtDays(x.c.need)}日（${x.c.sp.basis}）` : '速さ不明（1日で仮置き）');
   const drag = canDrag ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','bar')" ondragend="planDragEnd()"` : '';
   return `<div class="g-bar ${cls}${x.last < todayN ? ' past' : ''}" style="left:${l/planN*100}%;width:${(r-l)/planN*100}%" title="${esc(tip)}" onclick="openOrderSheet('${o.id}')"${drag}>` +
-    `<b>${o.startedAt?'▶ ':''}${esc(o.partNo)}</b><span>${o.qty.toLocaleString()}個</span><small>${x.late?'⚠遅れ ':''}納期${numMD(dayNum(o.due))}</small></div>`;
+    `<b>${o.startedAt?'▶ ':''}${esc(o.partNo)}</b>` +
+    (o.needsInput ? '<span>数量・納期を入力</span>'
+      : `<span>${o.qty.toLocaleString()}個</span><small>${x.late?'⚠遅れ ':''}納期${numMD(dayNum(o.due))}</small>`) + '</div>';
 }
 function renderPlanPool(){
   const el = $('#planPool'); if(!el) return;
@@ -3939,7 +3985,14 @@ function planAutoDone(){
   (store.orders||[]).forEach(o=>{
     if(o.done || !o.startedAt || !o.recId) return;
     const r = store.records.find(x=>x.id===o.recId);
-    if(r && r.status==='done'){ o.done = true; o.doneAt = r.endTime || new Date().toISOString(); o.doneQty = recordTotalQty(r); n++; }
+    if(!r || r.status!=='done') return;
+    if(r.auto){
+      // 自動記録（P-1など）は1日ごとに記録が変わる：同じ品番で続いていれば今日の記録へ付け替え、品番が変わった時だけ完了
+      const cur = activeFor(o.machineId);
+      if(!cur) return;                                              // 終業後・休みの日は続きとみなす
+      if((cur.partNo||'').trim() === o.partNo){ o.recId = cur.id; n++; return; }
+    }
+    o.done = true; o.doneAt = r.endTime || new Date().toISOString(); o.doneQty = recordTotalQty(r); n++;
   });
   return n;
 }
@@ -3982,7 +4035,8 @@ function planLinkStart(rec, orderId){
   if(!o){ const nx = nextOrderFor(m); if(nx && nx.o.partNo === (rec.partNo||'').trim()) o = nx.o; }   // 次の予定と同じ品番を読み取って開始した時もつなぐ
   if(!o) return null;
   const earlier = planPullForward(o, m);
-  o.startedAt = rec.startTime; o.recId = rec.id; rec.orderId = o.id;
+  o.startedAt = rec.startTime; o.recId = rec.id;
+  if(!PLAN_DEMO) rec.orderId = o.id;   // デモ中は日報の記録に印を付けない
   return { o, earlier };
 }
 // 待機中の画面に出す「次の予定」
@@ -4122,7 +4176,7 @@ function openOrderSheet(id){
   osId = o ? o.id : null;
   osCoilTouched = !!o;
   osSpeedTouched = !!(o && (o.spm || o.spp));
-  $('#osTitle').textContent = o ? '注文の編集' : '注文を追加';
+  $('#osTitle').textContent = !o ? '注文を追加' : o.needsInput ? '作業中の注文：残りの数量と納期を入れてください' : '注文の編集';
   // 過去の品番（全部の機械・新しい順）。選ぶとコイル・回転数も呼び出す
   const seen = new Map();
   store.records.forEach(r=>{
@@ -4135,8 +4189,8 @@ function openOrderSheet(id){
     [...seen.entries()].sort((a,b)=> b[1].t - a[1].t).map(([p,x])=>`<option value="${esc(p)}">${esc(p)}${x.t ? '　' + esc(x.m) + ' ' + fmtMD(x.t) : ''}</option>`).join('');
   $('#osHistory').value = o && seen.has(o.partNo) ? o.partNo : '';
   $('#osPart').value = o ? o.partNo : '';
-  $('#osQty').value = o ? o.qty : '';
-  $('#osDue').value = o ? o.due : '';
+  $('#osQty').value = o && !o.needsInput ? o.qty : '';   // 取り込んだ作業は仮の値を見せずに空欄で
+  $('#osDue').value = o && !o.needsInput ? o.due : '';
   $('#osCoil').innerHTML = '<option value="">（コイル未選択＝全部の機械に出す）</option>' + store.coils.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
   $('#osCoil').value = o ? (o.coilId||'') : '';
   $('#osSpm').value = o && o.spm ? o.spm : '';
@@ -4223,6 +4277,7 @@ function saveOrder(){
     store.orders.push(o);
   }
   o.partNo = part; o.qty = qty; o.due = due; o.coilId = $('#osCoil').value || null;
+  o.needsInput = false;
   const spm = parseInt($('#osSpm').value), spp = parseInt($('#osSpp').value);
   o.spm = spm > 0 ? spm : null; o.spp = spp > 0 ? spp : null;
   let moved = false;
@@ -4280,7 +4335,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.32';
+const APP_VERSION = '2026-06-28.33';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
