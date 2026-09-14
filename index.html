@@ -654,6 +654,110 @@
   .empty .e-ic{font-size:42px;opacity:.55;margin-bottom:10px;}
   .empty .e-t{font-size:14px;}
   @media (min-width:420px){.machine-grid{grid-template-columns:repeat(3,1fr);}}
+  [hidden]{display:none!important;}
+
+  /* ── 予定（機械ごとの予定表＋プール） ── */
+  .gantt-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;background:var(--surface);border:1px solid var(--line);border-radius:14px;margin-bottom:9px;}
+  .gantt{min-width:calc(76px + var(--n)*26px);}
+  .g-row{display:flex;border-top:1px solid var(--line);}
+  .g-row.g-headrow{border-top:none;}
+  .g-lab{flex:0 0 76px;position:sticky;left:0;z-index:3;background:var(--surface);border-right:1px solid var(--line);
+    padding:5px 8px;display:flex;flex-direction:column;justify-content:center;cursor:pointer;}
+  .g-headrow .g-lab{cursor:default;}
+  .g-lab b{font-family:var(--mono);font-size:14px;font-weight:800;color:var(--ink);line-height:1.2;}
+  .g-lab small{font-size:10px;color:var(--ink3);font-weight:700;white-space:nowrap;}
+  .g-row.sel .g-lab{background:#fff7f0;box-shadow:inset 3px 0 0 var(--orange);}
+  .g-row.sel .g-lab b{color:var(--orange-d);}
+  .g-days,.g-track{flex:1;min-width:0;display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));position:relative;}
+  .g-d{text-align:center;padding:5px 0 4px;line-height:1.15;color:var(--ink2);}
+  .g-d b{display:block;font-family:var(--mono);font-size:12.5px;font-weight:700;}
+  .g-d span{font-size:10px;font-weight:600;color:var(--ink3);}
+  .g-d.sun b{color:var(--stop);}
+  .g-d.sat b{color:var(--blue);}
+  .g-d.off{background:var(--steel);}
+  .g-d.today{box-shadow:inset 0 -3px 0 var(--orange);}
+  .g-track{height:46px;}
+  .g-c{border-left:1px solid #edf0f4;}
+  .g-c.off{background:repeating-linear-gradient(45deg,#f1f3f6,#f1f3f6 4px,#e6eaf0 4px,#e6eaf0 8px);}
+  .g-c.today{background:rgba(212,100,10,.08);}
+  .g-bar{position:absolute;top:7px;height:32px;border-radius:7px;padding:0 6px;display:flex;align-items:center;gap:5px;
+    font-size:11.5px;font-weight:700;white-space:nowrap;overflow:hidden;cursor:pointer;z-index:1;min-width:6px;}
+  /* 狭いバーでは品番を優先して残す（納期→個数の順に先に縮む） */
+  .g-bar b{font-family:var(--mono);font-weight:800;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  .g-bar span{font-family:var(--mono);flex:0 4 auto;min-width:0;overflow:hidden;}
+  .g-bar small{font-size:10px;font-weight:700;opacity:.85;flex:0 8 auto;min-width:0;overflow:hidden;}
+  .g-bar.ok{background:var(--run-bg);border:1.5px solid var(--run);color:var(--run-d);}
+  .g-bar.late{background:var(--stop-bg);border:1.5px solid var(--stop);color:var(--stop-d);}
+  .g-bar.unk{background:var(--surface2);border:1.5px dashed var(--ink3);color:var(--ink2);}
+  .g-bar.past{opacity:.55;}
+  .g-bar[draggable=true]{cursor:grab;}
+  .g-bar:hover{filter:brightness(.97);}
+  .g-track.over{background:rgba(26,111,196,.05);}
+  .g-mark{position:absolute;top:0;bottom:0;background:rgba(26,111,196,.16);border-left:2px solid var(--blue);pointer-events:none;z-index:2;}
+  #planTip{position:fixed;z-index:400;pointer-events:none;background:var(--ink);color:#fff;border-radius:10px;padding:8px 11px;
+    font-size:12.5px;font-weight:600;line-height:1.6;box-shadow:0 6px 18px rgba(0,0,0,.25);max-width:340px;}
+  #planTip .ok{color:#8fe0a8;}
+  #planTip .bad{color:#ffb3a8;}
+  #planTip .warn{color:#ffd98a;}
+  .plan-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:11.5px;color:var(--ink2);font-weight:600;margin:0 2px 4px;}
+  .plan-legend i{display:inline-block;width:15px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px;}
+  .plan-legend i.ok{background:var(--run-bg);border:1.5px solid var(--run);}
+  .plan-legend i.late{background:var(--stop-bg);border:1.5px solid var(--stop);}
+  .plan-legend i.off{background:repeating-linear-gradient(45deg,#f1f3f6,#f1f3f6 3px,#dde2e9 3px,#dde2e9 6px);border:1px solid var(--line);}
+  .pc-only{display:none;}
+  body.can-drag .pc-only{display:inline;}
+  .pool-head{display:flex;align-items:center;gap:6px 10px;margin:18px 2px 9px;flex-wrap:wrap;}
+  .pool-head .t{font-size:15px;font-weight:800;color:var(--ink);}
+  .pool-head .s{font-size:12px;color:var(--ink3);font-weight:600;}
+  .pool-head .btn-add{margin-left:auto;padding:11px 16px;}
+  .pool{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;min-height:70px;border-radius:14px;transition:background .12s;}
+  .pool.drop-ok{outline:2px dashed var(--line2);outline-offset:5px;}
+  .pool.over{background:rgba(26,111,196,.06);outline-color:var(--blue);}
+  .pool-empty{grid-column:1/-1;text-align:center;color:var(--ink3);font-size:13px;font-weight:600;padding:22px;border:1.5px dashed var(--line2);border-radius:13px;line-height:1.7;}
+  .oc{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--line2);border-radius:12px;padding:12px 13px;display:flex;flex-direction:column;gap:7px;}
+  .oc.st-ok{border-left-color:var(--run);}
+  .oc.st-warn{border-left-color:var(--pause);}
+  .oc.st-bad{border-left-color:var(--stop);}
+  .oc[draggable=true]{cursor:grab;}
+  .oc[draggable=true]:hover{box-shadow:0 3px 12px rgba(22,32,46,.1);}
+  .oc-top{display:flex;align-items:baseline;gap:8px;}
+  .oc-part{font-family:var(--mono);font-weight:800;font-size:15px;color:var(--ink);word-break:break-all;}
+  .oc-basis{margin-left:auto;font-size:10.5px;color:var(--ink3);font-weight:700;white-space:nowrap;}
+  .oc-sub{font-size:13px;color:var(--ink2);font-weight:600;}
+  .oc-sub b{color:var(--ink);}
+  .oc-m{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+  .oc-m > div{background:var(--surface2);border-radius:9px;padding:7px 9px;display:flex;flex-direction:column;min-width:0;}
+  .oc-m span{font-size:10.5px;color:var(--ink3);font-weight:700;}
+  .oc-m b{font-size:16px;font-weight:800;color:var(--ink);line-height:1.35;}
+  .oc-m small{font-size:10.5px;color:var(--ink3);font-weight:600;}
+  .oc-dl{font-size:13px;color:var(--ink2);font-weight:600;line-height:1.5;}
+  .oc-dl b{font-size:15px;color:var(--ink);font-weight:800;}
+  .opill{align-self:flex-start;font-size:12px;font-weight:800;border-radius:999px;padding:3px 11px;}
+  .opill.ok{background:var(--run-bg);color:var(--run-d);}
+  .opill.warn{background:var(--pause-bg);color:var(--pause-d);}
+  .opill.bad{background:var(--stop-bg);color:var(--stop-d);}
+  .opill.unk{background:var(--surface2);color:var(--ink2);}
+  .oc-alt{font-size:12px;font-weight:700;color:var(--blue);}
+  .oc-btns{display:flex;gap:8px;margin-top:2px;}
+  .oc-go{flex:1;padding:10px;border-radius:10px;background:var(--ink);color:#fff;font-size:13px;font-weight:700;}
+  .oc-go:active{background:#0d1620;}
+  .oc-ed{padding:10px 14px;border-radius:10px;border:1px solid var(--line2);background:var(--surface);color:var(--ink2);font-size:13px;font-weight:700;}
+  .oc-ed:active{background:var(--surface2);}
+  #orderSheet .sheet{max-height:94vh;overflow-y:auto;}
+  .of label{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ink3);font-weight:700;margin-bottom:10px;}
+  .of-in{width:100%;background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:11px 12px;font-size:16px;color:var(--ink);font-family:var(--sans);min-width:0;}
+  .of-in.mono{font-family:var(--mono);}
+  .of-in:focus{outline:none;border-color:var(--orange);}
+  .of2{display:flex;gap:10px;}
+  .of2 label{flex:1;min-width:0;}
+  .os-calc{background:var(--surface2);border:1px solid var(--line);border-radius:11px;padding:10px 12px;font-size:13px;color:var(--ink2);line-height:1.75;font-weight:600;}
+  .os-calc b{color:var(--ink);}
+  .os-calc .ok{color:var(--run-d);font-weight:800;}
+  .os-calc .warn{color:var(--pause-d);font-weight:800;}
+  .os-calc .bad{color:var(--stop-d);font-weight:800;}
+  .os-more{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}
+  .os-more button{flex:1;padding:11px 8px;border-radius:10px;border:1px solid var(--line2);background:var(--surface);font-size:13px;font-weight:700;color:var(--ink2);}
+  .os-more button.danger{border-color:var(--stop);color:var(--stop);}
 </style>
 </head>
 <body>
@@ -674,6 +778,7 @@
   <button class="tab active" data-tab="input"><span class="ic">📝</span>日報入力</button>
   <button class="tab" data-tab="records"><span class="ic">📋</span>記録</button>
   <button class="tab" data-tab="summary"><span class="ic">📊</span>日別集計</button>
+  <button class="tab" data-tab="plan"><span class="ic">🗓️</span>予定</button>
   <button class="tab" data-tab="settings"><span class="ic">⚙️</span>設定</button>
 </nav>
 
@@ -761,6 +866,30 @@
   <div class="day-meta" id="sumDayMeta"></div>
   <div id="summaryList"></div>
   <div id="summaryMonth" style="display:none"></div>
+</section>
+
+<!-- ===== PLAN（予定） ===== -->
+<section class="page wide" id="page-plan">
+  <div class="day-nav">
+    <button class="day-arrow" onclick="planMonthMove(-1)">◀</button>
+    <div class="day-label" id="planLabel" onclick="planThisMonth()">—</div>
+    <button class="day-arrow" onclick="planMonthMove(1)">▶</button>
+  </div>
+  <div class="rec-chips" id="planMachChips"></div>
+  <div class="gantt-wrap"><div id="planGantt"></div></div>
+  <div class="plan-legend">
+    <span><i class="ok"></i>納期に間に合う</span>
+    <span><i class="late"></i>納期に遅れる</span>
+    <span><i class="off"></i>休み（土日祝・休止）</span>
+    <span class="pc-only">🖱 カードを日付へドラッグで予定に入れる／バーをプールへドラッグで戻す</span>
+  </div>
+  <div class="pool-head">
+    <span class="t">📥 プール</span>
+    <span class="s" id="planPoolSub"></span>
+    <button class="btn-add" onclick="openOrderSheet()">＋ 注文を追加</button>
+  </div>
+  <div class="pool" id="planPool" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
+  <div class="set-note">速さは、その機械でその品番を作った日の記録（動いていた時間あたりの個数）から計算します。記録が5日未満の品番は理論値（回転数÷何回転で1個）で、1日の稼働を90%として計算します。土日祝と休止日は数えません。納期の日までに作り終われば「間に合う」です。</div>
 </section>
 
 <!-- ===== SETTINGS ===== -->
@@ -965,6 +1094,40 @@
     </div>
   </div>
 </div>
+<div class="ov" id="orderSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3 id="osTitle">注文を追加</h3>
+    <div class="of">
+      <label>品番<input type="text" id="osPart" class="of-in mono" list="osPartList" autocomplete="off" placeholder="例 9991-2400-016X" oninput="osRefresh()"></label>
+      <datalist id="osPartList"></datalist>
+      <div class="of2">
+        <label>数量（個）<input type="number" id="osQty" class="of-in mono" inputmode="numeric" placeholder="例 10000" oninput="osRefresh()"></label>
+        <label>納期<input type="date" id="osDue" class="of-in mono" oninput="osRefresh()"></label>
+      </div>
+      <label>コイル（同じコイルの機械のプールに出ます）<select id="osCoil" class="of-in" onchange="osCoilChanged()"></select></label>
+      <div class="of2" id="osSpeedRow" hidden>
+        <label>回転数/分<input type="number" id="osSpm" class="of-in mono" inputmode="numeric" oninput="osRefresh()"></label>
+        <label>何回転で1個<input type="number" id="osSpp" class="of-in mono" inputmode="numeric" oninput="osRefresh()"></label>
+      </div>
+      <div class="of2" id="osSched" hidden>
+        <label>機械<select id="osMach" class="of-in" onchange="osRefresh()"></select></label>
+        <label>開始日<input type="date" id="osStart" class="of-in mono" oninput="osRefresh()"></label>
+      </div>
+      <div class="os-calc" id="osCalc"></div>
+    </div>
+    <div class="sheet-actions">
+      <button class="b-cancel" onclick="closeOrderSheet()">キャンセル</button>
+      <button class="b-ok" onclick="saveOrder()">保存</button>
+    </div>
+    <div class="os-more" id="osMore" hidden>
+      <button id="osToPoolBtn" onclick="osToPool()">📥 プールに戻す</button>
+      <button onclick="osDone()">✓ 完了にする</button>
+      <button class="danger" onclick="osDelete()">削除</button>
+    </div>
+  </div>
+</div>
+<div id="planTip" hidden></div>
 <div id="updateBar" class="hidden">
   <span>新しいバージョンがあります</span>
   <button class="u-go" onclick="applyUpdate()">今すぐ更新</button>
@@ -982,7 +1145,7 @@
 const $ = s => document.querySelector(s);
 
 /* ===== STORE ===== */
-let store = { machines: [], records: [], coils: [], shutdowns: [], workdays: [] };
+let store = { machines: [], records: [], coils: [], shutdowns: [], workdays: [], orders: [] };
 const KEY = 'genbaNippoData_v1';
 
 function load(){
@@ -992,6 +1155,7 @@ function load(){
   if(!Array.isArray(store.coils)) store.coils = [];
   if(!Array.isArray(store.shutdowns)) store.shutdowns = [];
   if(!Array.isArray(store.workdays)) store.workdays = [];   // 土日祝でも稼働する日
+  if(!Array.isArray(store.orders)) store.orders = [];       // 注文（予定タブ）
   store.records.forEach(r=>{
     if(!Array.isArray(r.stops)) r.stops = [];
     if(!('lastRunEnd' in r)) r.lastRunEnd = null;
@@ -1027,7 +1191,8 @@ function enableAutoCreate(){
   autoCreateReady = true;
   if(processAutoDaily()) { refreshActiveViews(); }
 }
-const firstSnap = { machines:false, records:false, coils:false, shutdowns:false, workdays:false };
+// orders（予定）は初回同期の条件に入れない（読めなくても日報は今まで通り動くように）
+const firstSnap = { machines:false, records:false, coils:false, shutdowns:false, workdays:false, orders:false };
 const lastSynced = {};   // "machines/<id>" | "records/<id>" -> JSON文字列（エコー再送防止）
 
 function setSyncStatus(s){
@@ -1128,6 +1293,7 @@ function attachListeners(){
   db.collection('coils').onSnapshot(s=>applySnap('coils', s), e=>{ console.warn('coils listen', e); setSyncStatus('offline'); });
   db.collection('shutdowns').onSnapshot(s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
   db.collection('workdays').onSnapshot(s=>applySnap('workdays', s), e=>{ console.warn('workdays listen', e); setSyncStatus('offline'); });
+  db.collection('orders').onSnapshot(s=>applySnap('orders', s), e=>console.warn('orders listen', e));
 }
 // いま見ている機械の状態を1つの文字列にしたもの（他端末の操作を検知するのに使う）
 function machineStateKey(id){
@@ -1138,7 +1304,7 @@ function machineStateKey(id){
 }
 function applySnap(kind, snap){
   const beforeKey = (kind==='records' && initialSyncDone) ? machineStateKey(selectedMachineId) : null;
-  const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : kind==='workdays' ? store.workdays : store.records;
+  const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : kind==='workdays' ? store.workdays : kind==='orders' ? store.orders : store.records;
   snap.docChanges().forEach(ch=>{
     const id = ch.doc.id, data = ch.doc.data();
     const i = arr.findIndex(x=>x.id===id);
@@ -1176,6 +1342,7 @@ function syncPush(){
   store.coils.forEach(c=> cur['coils/'+c.id] = c);
   store.shutdowns.forEach(sd=> cur['shutdowns/'+sd.id] = sd);
   (store.workdays||[]).forEach(w=> cur['workdays/'+w.id] = w);
+  (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -1329,6 +1496,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     $('#page-'+t.dataset.tab).classList.add('active');
     if(t.dataset.tab==='records') renderRecords();
     if(t.dataset.tab==='summary') renderSummary();
+    if(t.dataset.tab==='plan'){ planScrollToday = true; renderPlan(); }
     if(t.dataset.tab==='settings') renderMachineSettings();
   };
 });
@@ -2124,6 +2292,9 @@ function refreshActiveViews(){
   }
   if($('#page-summary').classList.contains('active')) renderSummary();
   if($('#page-records').classList.contains('active')) renderRecords();
+  if($('#page-plan').classList.contains('active')){   // 他端末で入れた注文・予定も反映
+    try{ renderPlan(); }catch(e){ console.warn('renderPlan', e); }   // 予定の不具合で他の画面の更新を止めない
+  }
   if($('#page-settings').classList.contains('active')){
     renderMachineSettings();
     renderCoilSettings();
@@ -3263,6 +3434,592 @@ async function clearRecords(){
   toast('記録を削除しました');
 }
 
+/* ===== 予定（注文を機械の予定表に並べ、納期に間に合うかを計算） ===== */
+// 注文は orders に保存：{ id, partNo, qty, due, coilId, spm, spp, machineId, start, startFrac, seq, done }
+//  machineId・start が空＝プール（まだ日程が決まっていない注文）。
+//  start は「この日より前には始めない」日。同じ機械の予定は重ならないよう、前の予定の後ろへ自動で押し出す。
+//  位置は「日の番号＋その日のどこまで進んだか(0〜1)」で持つ（1日＝その機械が1日に動ける時間）。
+const PLAN_MIN_DAYS = 5;          // 記録がこの日数未満の品番は理論値で計算
+const PLAN_THEO_RATE = 0.9;       // 理論値のときの1日の稼働（90%）
+const canDrag = !!(window.matchMedia && matchMedia('(pointer:fine)').matches);   // マウスのある端末（PC）だけドラッグ
+document.body.classList.toggle('can-drag', canDrag);
+let planMonth = (()=>{ const d=new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
+let planMachine = null;           // プールを見ている機械
+let planDrag = null;              // ドラッグ中 { id, from:'pool'|'bar', key, tip }
+let planDirty = false;            // ドラッグ中に来た再描画を後回しにした印
+let planFirst = 0, planN = 30;    // 表示中の月（1日の番号・日数）
+let planWorkMemo = {};            // 「動く日か」のメモ（描画1回ぶん）
+let planScrollToday = true;       // 次の描画で今日の列までスクロールする
+let osId = null, osCoilTouched = false;
+
+function dayNum(k){ const [y,m,d]=String(k).split('-').map(Number); return Math.round(Date.UTC(y,m-1,d)/86400000); }
+function numDate(n){ const u=new Date(n*86400000); return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate()); }
+function numKey(n){ return dateKey(numDate(n)); }
+function numMD(n){ const d=numDate(n); return `${d.getMonth()+1}/${d.getDate()}`; }
+function numMDW(n){ const d=numDate(n); return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`; }
+// 1日に動ける時間（定時−休憩）
+function fullDayMin(){ const br = BREAKS.reduce((s,b)=> s + (b.eh*60+b.em)-(b.sh*60+b.sm), 0); return Math.max(60, stdMin(new Date()) - br); }
+function planFmtDays(x){ const v = Math.ceil(x*2 - 1e-9)/2; return v%1 ? v.toFixed(1) : String(v); }
+function planFmtHours(min){ const h = min/60; return h < 10 ? (Math.round(h*10)/10) + '時間' : Math.round(h) + '時間'; }
+// その機械が動く日か（土日祝・休止期間を除く）
+function isWorkNum(n, machineId){
+  const k = machineId + '|' + n;
+  if(k in planWorkMemo) return planWorkMemo[k];
+  const d = numDate(n);
+  return (planWorkMemo[k] = !offDay(d) && !isShutdown(d, machineId));
+}
+function posCmp(a, b){ return a.d !== b.d ? a.d - b.d : a.f - b.f; }
+function posNorm(p, machineId){
+  let d = p.d, f = p.f || 0;
+  if(f >= 1 - 1e-6){ d++; f = 0; }
+  for(let i=0; i<400 && !isWorkNum(d, machineId); i++){ d++; f = 0; }
+  return { d, f };
+}
+// p から need 日ぶん（動く日だけ数える）進める。end＝次の予定を始められる位置、last＝最後に作る日
+function posAdvance(p, need, machineId){
+  let { d, f } = posNorm(p, machineId), left = Math.max(0, need), last = d;
+  for(let i=0; i<3000 && left > 1e-6; i++){
+    if(!isWorkNum(d, machineId)){ d++; f = 0; continue; }
+    const take = Math.min(1 - f, left);
+    left -= take; f += take; last = d;
+    if(f >= 1 - 1e-6){ d++; f = 0; }
+  }
+  return { end:{ d, f }, last };
+}
+// 納期の日の終わりから need 日ぶん戻した位置（ここまでに始めれば納期の日までに作り終わる）
+function posLatest(dueKey, need, machineId){
+  let d = dayNum(dueKey), f = 1, left = Math.max(0, need);
+  for(let i=0; i<400 && !isWorkNum(d, machineId); i++) d--;
+  for(let i=0; i<3000 && left > 1e-6; i++){
+    if(!isWorkNum(d, machineId)){ d--; f = 1; continue; }
+    const take = Math.min(f, left);
+    left -= take; f -= take;
+    if(left > 1e-6){ d--; f = 1; }
+  }
+  return { d, f };
+}
+
+/* 機械×日ごとの「動いていた分・個数・作った品番」（昨日まで）。記録が変わった時だけ作り直す */
+let _planStats = { sig:null, data:{} };
+function planSig(){
+  let h = 0;
+  store.records.forEach(r=>{
+    const q = (r.dailyCounts||[]).reduce((x,d)=>x+(d.qty||0), 0);
+    h = (h*31 + q + (r.stops ? r.stops.length*7 : 0) + (r.endTime ? 3 : 0) + (r.spm||0) + (r.spp||0) + (r.partNo||'').length) % 1000000007;
+  });
+  return [store.records.length, dateKey(new Date()), (store.shutdowns||[]).length, (store.workdays||[]).length, h].join('|');
+}
+function planStats(){
+  const sig = planSig();
+  if(_planStats.sig === sig) return _planStats.data;
+  const todayK = dateKey(new Date()), nowT = Date.now();
+  const byM = {}, recsByM = {};
+  store.records.forEach(r=>{
+    const re = endRefT(r);
+    (recsByM[r.machineId] = recsByM[r.machineId] || []).push({
+      r, rs:new Date(r.startTime).getTime(), re,
+      stops:(r.stops||[]).map(s=>[ new Date(s.from).getTime(), s.to ? new Date(s.to).getTime() : re ])
+    });
+  });
+  Object.keys(recsByM).forEach(mid=>{
+    const list = recsByM[mid], keys = new Set(), days = {};
+    list.forEach(x=>{
+      const d = new Date(x.rs); d.setHours(0,0,0,0);
+      const e = Math.min(x.re, nowT);
+      for(let i=0; i<400 && d.getTime() <= e; i++){ keys.add(dateKey(d)); d.setDate(d.getDate()+1); }
+      (x.r.dailyCounts||[]).forEach(c=>{ if(c.date) keys.add(c.date); });
+    });
+    keys.forEach(k=>{
+      if(k >= todayK) return;                       // 今日は途中なので使わない
+      const d = numDate(dayNum(k));
+      if(offDay(d) || isShutdown(d, mid)) return;
+      const ws = stdStart(d).getTime(), we = stdEnd(d).getTime();
+      const br = BREAKS.map(b=>[ atHour(d,b.sh,b.sm).getTime(), atHour(d,b.eh,b.em).getTime() ]);
+      const on = list.filter(x=> x.rs < we && x.re > ws);
+      let run = 0;
+      for(let t=ws; t<we; t+=60000){
+        if(br.some(b=> t>=b[0] && t<b[1])) continue;
+        const x = on.find(x=> t>=x.rs && t<x.re);   // 日別集計と同じく、最初に当たった記録で判定
+        if(x && !x.stops.some(s=> t>=s[0] && t<s[1])) run++;
+      }
+      let qty = 0; const parts = new Set();
+      list.forEach(x=>{
+        const dc = (x.r.dailyCounts||[]).filter(c=>c.date===k);
+        dc.forEach(c=>{ qty += (c.qty||0); });
+        const p = (x.r.partNo||'').trim();
+        if(p && (dc.length || on.includes(x))) parts.add(p);
+      });
+      days[k] = { run, qty, parts:[...parts] };
+    });
+    byM[mid] = days;
+  });
+  _planStats = { sig, data:byM };
+  return byM;
+}
+// 理論値（回転数÷何回転で1個）の出どころ：この機械の記録 → 他の機械の記録 → 自動記録の設定 → 注文に入れた値
+function planTheory(machineId, partNo, o){
+  let best = null, any = null;
+  store.records.forEach(r=>{
+    if((r.partNo||'').trim() !== partNo || !(r.spm>0 && r.spp>0)) return;
+    const t = new Date(r.startTime).getTime();
+    if(r.machineId === machineId && (!best || t > best.t)) best = { t, spm:r.spm, spp:r.spp };
+    if(!any || t > any.t) any = { t, spm:r.spm, spp:r.spp };
+  });
+  if(best || any) return best || any;
+  const m = store.machines.find(x=>x.id===machineId);
+  if(m && m.auto && (m.auto.partNo||'') === partNo && m.auto.spm>0 && m.auto.spp>0) return { spm:m.auto.spm, spp:m.auto.spp };
+  if(o && o.spm>0 && o.spp>0) return { spm:o.spm, spp:o.spp, src:'order' };
+  return null;
+}
+// 速さ：実績（その品番だけを作った日の 個数÷動いていた分）。5日未満なら理論値×稼働90%
+function planSpeed(machineId, partNo, o){
+  const days = planStats()[machineId] || {};
+  let q = 0, run = 0, n = 0, dayRun = 0, dayN = 0;
+  Object.values(days).forEach(v=>{
+    if(v.run > 0){ dayRun += v.run; dayN++; }
+    if(v.qty > 0 && v.run > 0 && v.parts.length === 1 && v.parts[0] === partNo){ q += v.qty; run += v.run; n++; }
+  });
+  const full = fullDayMin();
+  if(n >= PLAN_MIN_DAYS){
+    const perDay = dayN >= PLAN_MIN_DAYS ? Math.min(full, dayRun/dayN) : full*PLAN_THEO_RATE;
+    return { ok:true, rate:q/run, perDay, full, n, basis:`実績${n}日分` };
+  }
+  const th = planTheory(machineId, partNo, o);
+  if(th) return { ok:true, rate:th.spm/th.spp, perDay:full*PLAN_THEO_RATE, full, n, th, basis:'理論値' + (n ? `（記録${n}日）` : '') };
+  return { ok:false, full, n, basis:'速さ不明' };
+}
+// 目標時間（分）・見込み日数（いつもの1日の稼働で）・止まらなければの日数
+function orderCalc(o, machineId){
+  const sp = planSpeed(machineId, o.partNo, o);
+  if(!sp.ok || !(o.qty > 0)) return { ok:false, sp };
+  const min = o.qty / sp.rate;
+  return { ok:true, sp, min, need:min/sp.perDay, fast:min/sp.full };
+}
+// 機械の予定を並べる（開始日順。重なる分は前の予定の後ろへ押し出す）。override＝ドラッグ中の仮の位置
+function planLayout(machineId, override){
+  const list = store.orders.filter(o=> validOrder(o) && !o.done && isScheduled(o) && o.machineId===machineId && !(override && o.id===override.id));
+  if(override && override.machineId===machineId) list.push(override);
+  list.sort((a,b)=> a.start!==b.start ? (a.start<b.start ? -1 : 1) : ((a.startFrac||0)-(b.startFrac||0)) || ((b.seq||0)-(a.seq||0)));
+  let cur = null; const out = [];
+  list.forEach(o=>{
+    const c = orderCalc(o, machineId);
+    let p = { d:dayNum(o.start), f:o.startFrac||0 };
+    if(cur && posCmp(cur, p) > 0) p = cur;
+    p = posNorm(p, machineId);
+    const a = posAdvance(p, c.ok ? c.need : 1, machineId);   // 速さ不明は1日で仮置き
+    cur = a.end;
+    out.push({ o, c, s:p, e:a.end, last:a.last, late: c.ok && a.last > dayNum(o.due) });
+  });
+  return out;
+}
+// 今から入れられる最初の位置（終業後なら翌日から）
+function planTodayPos(machineId){
+  const now = new Date(); let d = dayNum(dateKey(now));
+  if(now.getTime() >= stdEnd(now).getTime()) d++;
+  return posNorm({ d, f:0 }, machineId);
+}
+// 機械の空き＝最後の予定が終わる位置（今日より前なら今日）
+function planFree(machineId, lay){
+  lay = lay || planLayout(machineId);
+  let p = planTodayPos(machineId);
+  lay.forEach(x=>{ if(posCmp(x.e, p) > 0) p = x.e; });
+  return posNorm(p, machineId);
+}
+// 注文が入る最初の空き（予定と予定の間に収まればそこ、無ければ最後の予定の後ろ）
+function planSlot(o, machineId, lay){
+  lay = lay || planLayout(machineId);
+  const c = orderCalc(o, machineId), need = c.ok ? c.need : 1;
+  let p = planTodayPos(machineId);
+  for(const x of lay){
+    if(posCmp(x.e, p) <= 0) continue;                       // もう終わっている予定
+    if(posCmp(x.s, p) > 0 && posCmp(posAdvance(p, need, machineId).end, x.s) <= 0) return posNorm(p, machineId);
+    p = x.e;
+  }
+  return posNorm(p, machineId);
+}
+// この機械の空きに入れて納期に間に合うか
+function orderFit(o, machineId, lay){
+  const c = orderCalc(o, machineId);
+  if(!c.ok || !o.due) return { c, st:'unk' };
+  const latest = posLatest(o.due, c.need, machineId);
+  const free = planSlot(o, machineId, lay);
+  const slack = latest.d - free.d;
+  const st = posCmp(free, latest) > 0 ? 'bad' : slack >= 7 ? 'ok' : 'warn';
+  return { c, latest, free, slack, st };
+}
+function planStLabel(fit){
+  if(fit.st==='ok') return `余裕あり（あと${fit.slack}日）`;
+  if(fit.st==='warn') return `そろそろ（あと${fit.slack}日）`;
+  if(fit.st==='bad') return '間に合わない';
+  return '速さ不明';
+}
+// 注文を出す機械：同じコイルを使ったことがある機械・同じ品番を作ったことがある機械・コイルの記録がまだ無い機械
+let _coilUse = { n:-1, used:{} };
+function coilUseMap(){
+  if(_coilUse.n !== store.records.length){
+    const used = {};
+    store.records.forEach(r=>{ if(r.coilId) (used[r.machineId] = used[r.machineId] || new Set()).add(r.coilId); });
+    _coilUse = { n:store.records.length, used };
+  }
+  return _coilUse.used;
+}
+function orderMachines(o){
+  const all = store.machines.map(m=>m.id);
+  if(!o.coilId) return all;
+  const used = coilUseMap();
+  const made = new Set(store.records.filter(r=>(r.partNo||'').trim()===o.partNo).map(r=>r.machineId));
+  const list = all.filter(id=> !used[id] || used[id].has(o.coilId) || made.has(id));
+  return list.length ? list : all;
+}
+function planMachineCoils(machineId){
+  const s = coilUseMap()[machineId];
+  return s ? [...s].map(id=>(store.coils.find(c=>c.id===id)||{}).name).filter(Boolean) : [];
+}
+// 形の崩れた注文（他の版・書きかけ等）は表示しない（描画が止まらないように）
+const PLAN_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function validOrder(o){ return !!(o && o.id && typeof o.partNo==='string' && o.partNo && o.qty > 0 && PLAN_DATE_RE.test(o.due||'')); }
+function isScheduled(o){ return !!(o.start && PLAN_DATE_RE.test(o.start) && store.machines.some(m=>m.id===o.machineId)); }
+function isPooled(o){ return validOrder(o) && !o.done && !isScheduled(o); }
+function lastCoilOf(partNo){
+  let best = null;
+  store.records.forEach(r=>{
+    if((r.partNo||'').trim()!==partNo || !r.coilId || !store.coils.some(c=>c.id===r.coilId)) return;
+    const t = new Date(r.startTime).getTime();
+    if(!best || t > best.t) best = { t, id:r.coilId };
+  });
+  return best ? best.id : null;
+}
+
+function renderPlan(){
+  if(planDrag){ planDirty = true; return; }   // ドラッグ中に描き直すとドラッグが切れる
+  if(!$('#page-plan')) return;
+  planWorkMemo = {};
+  const ms = store.machines;
+  if(!planMachine || !ms.some(m=>m.id===planMachine)){
+    planMachine = (selectedMachineId && ms.some(m=>m.id===selectedMachineId)) ? selectedMachineId : (ms[0] ? ms[0].id : null);
+  }
+  const y = planMonth.getFullYear(), mo = planMonth.getMonth();
+  const now = new Date(), todayN = dayNum(dateKey(now));
+  planN = new Date(y, mo+1, 0).getDate();
+  planFirst = dayNum(dateKey(new Date(y, mo, 1)));
+  $('#planLabel').textContent = `${y}年${mo+1}月` + (y===now.getFullYear() && mo===now.getMonth() ? '（今月）' : '');
+  $('#planMachChips').innerHTML = ms.map(m=>`<button class="rchip${m.id===planMachine?' sel':''}" onclick="setPlanMachine('${esc(m.id)}')">${esc(m.id)}</button>`).join('');
+  if(!ms.length){
+    $('#planGantt').innerHTML = '<div class="rec-empty-note">機械が未登録です。設定タブで登録してください。</div>';
+    $('#planPool').innerHTML = ''; $('#planPoolSub').textContent = '';
+    return;
+  }
+  let head = '';
+  for(let i=0; i<planN; i++){
+    const n = planFirst + i, d = numDate(n), wd = d.getDay(), off = offDay(d);
+    head += `<div class="g-d${off?' off':''}${n===todayN?' today':''}${wd===0?' sun':wd===6?' sat':''}"${off?` title="${esc(off.label)}"`:''}><b>${d.getDate()}</b><span>${WD[wd]}</span></div>`;
+  }
+  const rows = ms.map(m=>{
+    const lay = planLayout(m.id), free = planFree(m.id, lay);
+    let cells = '';
+    for(let i=0; i<planN; i++){
+      const n = planFirst + i;
+      cells += `<div class="g-c${isWorkNum(n, m.id)?'':' off'}${n===todayN?' today':''}"></div>`;
+    }
+    const bars = lay.map(x=> planBarHtml(x, todayN)).join('');
+    return `<div class="g-row${m.id===planMachine?' sel':''}">
+      <div class="g-lab" onclick="setPlanMachine('${esc(m.id)}')"><b>${esc(m.id)}</b><small>空き ${numMD(free.d)}〜</small></div>
+      <div class="g-track" ondragover="planOver(event,'${esc(m.id)}')" ondragleave="planLeave(event)" ondrop="planDropTrack(event,'${esc(m.id)}')">${cells}${bars}</div>
+    </div>`;
+  }).join('');
+  const wrap = $('#planGantt').parentNode, keepX = wrap.scrollLeft;
+  $('#planGantt').innerHTML = `<div class="gantt" style="--n:${planN}"><div class="g-row g-headrow"><div class="g-lab"></div><div class="g-days">${head}</div></div>${rows}</div>`;
+  // 開いた時は今日の列が左寄りに来るように（スマホは横スクロール）。他端末からの再描画ではスクロール位置を保つ
+  if(planScrollToday){
+    planScrollToday = false;
+    const i = todayN - planFirst, cw = (wrap.scrollWidth - 76) / planN;
+    wrap.scrollLeft = (i >= 0 && i < planN) ? Math.max(0, (i - 1) * cw) : 0;
+  } else wrap.scrollLeft = keepX;
+  renderPlanPool();
+}
+function planBarHtml(x, todayN){
+  const l = Math.max(0, x.s.d + x.s.f - planFirst), r = Math.min(planN, x.e.d + x.e.f - planFirst);
+  if(r <= 0 || l >= planN || r <= l) return '';
+  const o = x.o, cls = !x.c.ok ? 'unk' : x.late ? 'late' : 'ok';
+  const tip = `${o.partNo}　${o.qty.toLocaleString()}個\n${numMDW(x.s.d)} 〜 ${numMDW(x.last)}\n納期 ${numMDW(dayNum(o.due))}${x.late?'（遅れる）':''}\n` +
+    (x.c.ok ? `見込み${planFmtDays(x.c.need)}日（${x.c.sp.basis}）` : '速さ不明（1日で仮置き）');
+  const drag = canDrag ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','bar')" ondragend="planDragEnd()"` : '';
+  return `<div class="g-bar ${cls}${x.last < todayN ? ' past' : ''}" style="left:${l/planN*100}%;width:${(r-l)/planN*100}%" title="${esc(tip)}" onclick="openOrderSheet('${o.id}')"${drag}>` +
+    `<b>${esc(o.partNo)}</b><span>${o.qty.toLocaleString()}個</span><small>${x.late?'⚠遅れ ':''}納期${numMD(dayNum(o.due))}</small></div>`;
+}
+function renderPlanPool(){
+  const el = $('#planPool'); if(!el) return;
+  const mId = planMachine;
+  const lay = planLayout(mId);
+  const pooled = store.orders.filter(isPooled);
+  const items = pooled.filter(o=> orderMachines(o).includes(mId)).map(o=>({ o, fit:orderFit(o, mId, lay) }));
+  const rank = x => x.fit.st==='unk' ? 1e9 : x.fit.latest.d + x.fit.latest.f;
+  items.sort((a,b)=> (rank(a)-rank(b)) || (a.o.due<b.o.due ? -1 : a.o.due>b.o.due ? 1 : 0));
+  const coils = planMachineCoils(mId);
+  $('#planPoolSub').textContent = `${mId} で作れる注文 ${items.length}件` + (coils.length ? `（${coils.join('・')}）` : '');
+  const other = pooled.length - items.length;
+  el.innerHTML = items.length ? items.map(x=> planCardHtml(x.o, x.fit, mId)).join('')
+    : `<div class="pool-empty">${esc(mId)} で作れる注文はありません。<br>注文が入ったら「＋ 注文を追加」で入れてください。${other>0 ? `<br><small>（他の機械向けの注文 ${other}件）</small>` : ''}</div>`;
+}
+function planCardHtml(o, fit, machineId){
+  const c = fit.c;
+  let alt = '';
+  if(fit.st==='bad'){
+    const ok = orderMachines(o).filter(id=> id!==machineId && ['ok','warn'].includes(orderFit(o, id).st));
+    alt = ok.length ? `<div class="oc-alt">→ ${ok.map(esc).join('・')} なら間に合います</div>` : '';
+  }
+  const body = c.ok
+    ? `<div class="oc-m">
+        <div><span>目標時間</span><b>約${planFmtHours(c.min)}</b><small>${o.qty.toLocaleString()}個 ÷ ${c.sp.rate.toFixed(2)}個/分</small></div>
+        <div><span>必要日数</span><b>見込み${planFmtDays(c.need)}日</b><small>止まらなければ${planFmtDays(c.fast)}日</small></div>
+      </div>
+      <div class="oc-dl">開始期限 <b>${numMDW(fit.latest.d)}</b> まで</div>`
+    : `<div class="oc-dl">この品番の速さが分かりません。<br>「編集」で回転数を入れると計算できます。</div>`;
+  const drag = canDrag ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','pool')" ondragend="planDragEnd()"` : '';
+  return `<div class="oc st-${fit.st}"${drag}>
+    <div class="oc-top"><span class="oc-part">${esc(o.partNo)}</span><span class="oc-basis">${c.ok ? esc(c.sp.basis) : ''}</span></div>
+    <div class="oc-sub">${o.qty.toLocaleString()}個　納期 <b>${numMDW(dayNum(o.due))}</b></div>
+    ${body}
+    <span class="opill ${fit.st}">${planStLabel(fit)}</span>${alt}
+    <div class="oc-btns"><button class="oc-go" onclick="planPut('${o.id}')">${esc(machineId)}の予定に入れる</button><button class="oc-ed" onclick="openOrderSheet('${o.id}')">編集</button></div>
+  </div>`;
+}
+function setPlanMachine(id){ planMachine = id; renderPlan(); }
+function planMonthMove(k){ planMonth = new Date(planMonth.getFullYear(), planMonth.getMonth()+k, 1); planScrollToday = true; renderPlan(); }
+function planThisMonth(){ const d=new Date(); planMonth = new Date(d.getFullYear(), d.getMonth(), 1); planScrollToday = true; renderPlan(); }
+// 予定に入れた結果を知らせる
+function planToastPlaced(o){
+  planWorkMemo = {};
+  const me = planLayout(o.machineId).find(x=>x.o.id===o.id);
+  if(!me) return;
+  if(me.late) toast(`${o.machineId}：${numMDW(me.last)} 完了の見込み（納期に遅れます）`, 'error');
+  else toast(`${o.machineId}：${numMDW(me.s.d)}〜${numMDW(me.last)} に入れました`, 'success');
+}
+// 「○○の予定に入れる」：その機械の空いている所（収まる隙間、無ければ最後の予定の後ろ）に入れる
+function planPut(id){
+  const o = store.orders.find(x=>x.id===id); if(!o || !planMachine) return;
+  planWorkMemo = {};
+  const free = planSlot(o, planMachine);
+  o.machineId = planMachine; o.start = numKey(free.d); o.startFrac = free.f; o.seq = Date.now();
+  save(); renderPlan(); planToastPlaced(o);
+}
+function planToPool(id){
+  const o = store.orders.find(x=>x.id===id); if(!o) return;
+  o.machineId = null; o.start = null; o.startFrac = 0;
+  save(); renderPlan(); toast('プールに戻しました');
+}
+
+/* ── PC：ドラッグで予定に入れる／動かす／プールに戻す ── */
+function planDragStart(e, id, from){
+  planDrag = { id, from, key:null, tip:'' };
+  try{ e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; }catch(_){}
+  if(from==='bar') $('#planPool').classList.add('drop-ok');
+}
+function planDragEnd(){
+  planDrag = null;
+  document.querySelectorAll('.g-track.over').forEach(x=>x.classList.remove('over'));
+  document.querySelectorAll('.g-mark').forEach(x=>x.remove());
+  $('#planPool').classList.remove('drop-ok','over');
+  planHideTip();
+  if(planDirty){ planDirty = false; renderPlan(); }
+}
+function planDayAt(e, track){
+  const r = track.getBoundingClientRect();
+  const i = Math.max(0, Math.min(planN-1, Math.floor((e.clientX - r.left) / r.width * planN)));
+  return planFirst + i;
+}
+// ドラッグ中：その日に置いたら何日に終わるか・納期に間に合うかを出す
+function planPreview(id, machineId, n){
+  planWorkMemo = {};
+  const o = store.orders.find(x=>x.id===id); if(!o) return '';
+  const before = new Set(planLayout(machineId).filter(x=> x.late && x.o.id!==id).map(x=>x.o.id));
+  const tmp = Object.assign({}, o, { machineId, start:numKey(n), startFrac:0, seq:Date.now() });
+  const lay = planLayout(machineId, tmp);
+  const me = lay.find(x=>x.o.id===id); if(!me) return '';
+  let h = `<b>${esc(machineId)}</b>　${numMDW(me.s.d)} 開始 → ${numMDW(me.last)} 完了`;
+  if(!me.c.ok) h += '<div class="warn">速さが分からないので1日で仮置きします</div>';
+  else h += me.late ? `<div class="bad">✕ 納期 ${numMDW(dayNum(o.due))} に遅れます</div>` : `<div class="ok">✓ 納期 ${numMDW(dayNum(o.due))} に間に合います</div>`;
+  const pushed = lay.filter(x=> x.late && x.o.id!==id && !before.has(x.o.id)).length;
+  if(pushed) h += `<div class="bad">⚠ 後ろの予定 ${pushed}件 が納期に遅れます</div>`;
+  if(!orderMachines(o).includes(machineId)) h += '<div class="warn">この機械では使ったことのないコイルです</div>';
+  return h;
+}
+function planOver(e, machineId){
+  if(!planDrag) return;
+  e.preventDefault();
+  try{ e.dataTransfer.dropEffect = 'move'; }catch(_){}
+  const tr = e.currentTarget;
+  document.querySelectorAll('.g-track.over').forEach(x=>{ if(x!==tr) x.classList.remove('over'); });
+  tr.classList.add('over');
+  const n = planDayAt(e, tr), key = machineId + '|' + n;
+  if(planDrag.key !== key){
+    planDrag.key = key;
+    planDrag.tip = planPreview(planDrag.id, machineId, n);
+    document.querySelectorAll('.g-mark').forEach(x=>{ if(x.parentNode!==tr) x.remove(); });
+    let mk = tr.querySelector('.g-mark');
+    if(!mk){ mk = document.createElement('div'); mk.className = 'g-mark'; tr.appendChild(mk); }
+    mk.style.left = ((n-planFirst)/planN*100) + '%'; mk.style.width = (100/planN) + '%';
+  }
+  planShowTip(e.clientX, e.clientY, planDrag.tip);
+}
+function planLeave(e){
+  const tr = e.currentTarget;
+  if(e.relatedTarget && tr.contains(e.relatedTarget)) return;
+  tr.classList.remove('over');
+  const mk = tr.querySelector('.g-mark'); if(mk) mk.remove();
+  if(planDrag) planDrag.key = null;
+  planHideTip();
+}
+function planDropTrack(e, machineId){
+  if(!planDrag) return;
+  e.preventDefault();
+  const n = planDayAt(e, e.currentTarget);
+  const o = store.orders.find(x=>x.id===planDrag.id);
+  planDragEnd();
+  if(!o) return;
+  o.machineId = machineId; o.start = numKey(n); o.startFrac = 0; o.seq = Date.now();
+  save(); renderPlan(); planToastPlaced(o);
+}
+function planPoolOver(e){
+  if(!planDrag || planDrag.from!=='bar') return;
+  e.preventDefault();
+  try{ e.dataTransfer.dropEffect = 'move'; }catch(_){}
+  $('#planPool').classList.add('over');
+  planHideTip();
+}
+function planPoolLeave(e){
+  if(e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return;
+  $('#planPool').classList.remove('over');
+}
+function planPoolDrop(e){
+  if(!planDrag || planDrag.from!=='bar') return;
+  e.preventDefault();
+  const id = planDrag.id;
+  planDragEnd();
+  planToPool(id);
+}
+function planShowTip(x, y, html){
+  const t = $('#planTip'); if(!t) return;
+  if(!html){ t.hidden = true; return; }
+  if(t._h !== html){ t.innerHTML = html; t._h = html; }
+  t.hidden = false;
+  const w = t.offsetWidth, h = t.offsetHeight;
+  t.style.left = Math.max(8, Math.min(x + 16, innerWidth - w - 8)) + 'px';
+  t.style.top = (y + 22 + h > innerHeight - 8 ? y - h - 12 : y + 22) + 'px';
+}
+function planHideTip(){ const t = $('#planTip'); if(t) t.hidden = true; }
+
+/* ── 注文の追加・編集シート ── */
+function openOrderSheet(id){
+  planWorkMemo = {};
+  const o = id ? store.orders.find(x=>x.id===id) : null;
+  osId = o ? o.id : null;
+  osCoilTouched = !!o;
+  $('#osTitle').textContent = o ? '注文の編集' : '注文を追加';
+  const parts = new Set();
+  store.records.forEach(r=>{ const p=(r.partNo||'').trim(); if(p) parts.add(p); });
+  store.orders.forEach(x=>{ if(x.partNo) parts.add(x.partNo); });
+  $('#osPartList').innerHTML = [...parts].map(p=>`<option value="${esc(p)}"></option>`).join('');
+  $('#osPart').value = o ? o.partNo : '';
+  $('#osQty').value = o ? o.qty : '';
+  $('#osDue').value = o ? o.due : '';
+  $('#osCoil').innerHTML = '<option value="">（コイル未選択＝全部の機械に出す）</option>' + store.coils.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  $('#osCoil').value = o ? (o.coilId||'') : '';
+  $('#osSpm').value = o && o.spm ? o.spm : '';
+  $('#osSpp').value = o && o.spp ? o.spp : '';
+  const sched = !!(o && !isPooled(o));
+  $('#osSched').hidden = !sched;
+  if(sched){
+    $('#osMach').innerHTML = store.machines.map(m=>`<option value="${esc(m.id)}">${esc(m.id)}</option>`).join('');
+    $('#osMach').value = o.machineId; $('#osStart').value = o.start;
+  }
+  $('#osMore').hidden = !o;
+  $('#osToPoolBtn').hidden = !sched;
+  $('#orderSheet').classList.add('active');
+  osRefresh();
+}
+function closeOrderSheet(){ $('#orderSheet').classList.remove('active'); osId = null; }
+function osCoilChanged(){ osCoilTouched = true; osRefresh(); }
+// 入力に合わせて、目標時間・開始期限をその場で計算して見せる
+function osRefresh(){
+  planWorkMemo = {};
+  const part = $('#osPart').value.trim();
+  if(!osCoilTouched) $('#osCoil').value = (part && lastCoilOf(part)) || '';   // コイルは品番の履歴から自動
+  const o0 = osId ? store.orders.find(x=>x.id===osId) : null;
+  const sched = !$('#osSched').hidden;
+  const mId = sched ? $('#osMach').value : planMachine;
+  const tmp = { id:osId||'_new', partNo:part, qty:parseInt($('#osQty').value)||0, due:$('#osDue').value,
+    spm:parseInt($('#osSpm').value)||null, spp:parseInt($('#osSpp').value)||null, coilId:$('#osCoil').value||null };
+  const calc = $('#osCalc');
+  if(!part || !mId){
+    $('#osSpeedRow').hidden = true;
+    calc.innerHTML = '品番・数量・納期を入れると、目標時間と「いつまでに始めればいいか」を計算します。';
+    return;
+  }
+  const sp = planSpeed(mId, part, tmp);
+  $('#osSpeedRow').hidden = sp.ok && !(sp.th && sp.th.src==='order');   // 速さが分からない品番だけ回転数の欄を出す
+  if(!sp.ok){ calc.innerHTML = '⚠ この品番は速さが分かりません。<b>回転数/分</b> と <b>何回転で1個</b> を入れると計算できます。'; return; }
+  let h = `${esc(mId)} で <b>${sp.rate.toFixed(2)}個/分</b>（${esc(sp.basis)}）`;
+  if(tmp.qty > 0){
+    const c = orderCalc(tmp, mId);
+    h += `<br>目標時間 <b>約${planFmtHours(c.min)}</b>　見込み <b>${planFmtDays(c.need)}日</b>（止まらなければ ${planFmtDays(c.fast)}日）`;
+    if(tmp.due){
+      const st = $('#osStart').value;
+      if(sched && st){
+        const same = o0 && o0.machineId===mId && o0.start===st;
+        const t2 = Object.assign({}, tmp, { machineId:mId, start:st, startFrac: same ? (o0.startFrac||0) : 0, seq: same ? (o0.seq||0) : Date.now() });
+        const me = planLayout(mId, t2).find(x=>x.o.id===t2.id);
+        if(me) h += `<br>${numMDW(me.s.d)} 開始 → <b>${numMDW(me.last)}</b> 完了　` + (me.late ? '<span class="bad">納期に遅れます</span>' : '<span class="ok">納期に間に合います</span>');
+      } else {
+        const fit = orderFit(tmp, mId);
+        if(fit.latest) h += `<br>開始期限 <b>${numMDW(fit.latest.d)}</b> まで　<span class="${fit.st}">${planStLabel(fit)}</span>`;
+      }
+    }
+  }
+  calc.innerHTML = h;
+}
+function saveOrder(){
+  const part = $('#osPart').value.trim(), qty = parseInt($('#osQty').value), due = $('#osDue').value;
+  if(!part){ toast('品番を入れてください','error'); return; }
+  if(!(qty > 0)){ toast('数量を入れてください','error'); return; }
+  if(!due){ toast('納期を入れてください','error'); return; }
+  const isEdit = !!osId;
+  let o = isEdit ? store.orders.find(x=>x.id===osId) : null;
+  if(!o){
+    o = { id:'o'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), machineId:null, start:null, startFrac:0, seq:0, done:false, createdAt:new Date().toISOString() };
+    store.orders.push(o);
+  }
+  o.partNo = part; o.qty = qty; o.due = due; o.coilId = $('#osCoil').value || null;
+  const spm = parseInt($('#osSpm').value), spp = parseInt($('#osSpp').value);
+  o.spm = spm > 0 ? spm : null; o.spp = spp > 0 ? spp : null;
+  let moved = false;
+  if(!$('#osSched').hidden){
+    const m = $('#osMach').value, st = $('#osStart').value;
+    if(m && st && (m!==o.machineId || st!==o.start)){ o.machineId = m; o.start = st; o.startFrac = 0; o.seq = Date.now(); moved = true; }
+  }
+  save(); closeOrderSheet(); renderPlan();
+  if(moved) planToastPlaced(o);
+  else toast(isEdit ? '注文を更新しました' : '注文をプールに入れました', 'success');
+}
+function osToPool(){ const id = osId; closeOrderSheet(); planToPool(id); }
+async function osDone(){
+  const o = store.orders.find(x=>x.id===osId); if(!o) return;
+  closeOrderSheet();
+  const ok = await confirmDialog('完了にする', `${o.partNo}（${o.qty.toLocaleString()}個）を完了にして、予定から外します。`, '完了にする');
+  if(!ok) return;
+  o.done = true; o.doneAt = new Date().toISOString();
+  save(); renderPlan(); toast('完了にしました','success');
+}
+async function osDelete(){
+  const o = store.orders.find(x=>x.id===osId); if(!o) return;
+  closeOrderSheet();
+  const ok = await confirmDialog('注文の削除', `${o.partNo}（${o.qty.toLocaleString()}個）の注文を削除します。`, '削除する', true);
+  if(!ok) return;
+  store.orders = store.orders.filter(x=>x.id!==o.id);
+  delDoc('orders', o.id);
+  save(); renderPlan(); toast('削除しました');
+}
+
 /* ===== CLOCK ===== */
 function clockTick(){ $('#clock').textContent = fmtClock(new Date()); }
 
@@ -3290,7 +4047,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.28';
+const APP_VERSION = '2026-06-28.29';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
