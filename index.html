@@ -966,7 +966,7 @@
   <div class="card set-card">
     <h3>🏷️ 品番の品名</h3>
     <div id="partNameList"></div>
-    <div class="set-note">品名を入れると、日報入力の「過去の品番」や記録、予定の注文に品名が出ます。全端末で共有されます。</div>
+    <div class="set-note">品名は<b>任意</b>です。入れると、日報入力の「過去の品番」や記録、予定の注文に品名が出ます（全端末で共有）。空にすれば品名なしに戻ります。</div>
   </div>
 
   <div class="card set-card">
@@ -1155,7 +1155,7 @@
     <h3 id="osTitle">注文を追加</h3>
     <div class="of">
       <label>品番<input type="text" id="osPart" class="scanned-input" autocomplete="off" inputmode="text" placeholder="バーコード読取／品番を手入力" oninput="osRefresh()"></label>
-      <label>品名<input type="text" id="osName" class="of-in" autocomplete="off" placeholder="品名（例 SUS430棚柱）" oninput="osNameInput()"></label>
+      <label>品名（任意）<input type="text" id="osName" class="of-in" autocomplete="off" placeholder="空でもOK（例 SUS430棚柱）" oninput="osNameInput()"></label>
       <!-- 日報入力の「バーコードを読み取る」と同じ入力（デモ中のパソコンはここで入れる） -->
       <div class="os-scan">
         <button type="button" class="btn-scan" onclick="osOpenScanner()"><span class="cam">📷</span>バーコードを読み取る</button>
@@ -3500,7 +3500,7 @@ function renderPartNames(){
   el.innerHTML = list.map(x=>`
     <div class="mset">
       <span class="mi-id pn-id">${esc(x.partNo)}</span>
-      <input type="text" class="pn-in" value="${esc(partNameOf(x.partNo))}" placeholder="品名（例 SUS430棚柱）" onchange="setPartName('${esc(x.partNo)}', this.value)">
+      <input type="text" class="pn-in" value="${esc(partNameOf(x.partNo))}" placeholder="品名（任意）" onchange="setPartName('${esc(x.partNo)}', this.value)">
     </div>`).join('');
 }
 /* ===== COILS（コイル在庫） ===== */
@@ -4488,9 +4488,9 @@ function saveOrder(){
     store.orders.push(o);
   }
   o.partNo = part; o.qty = qty; o.due = due; o.coilId = $('#osCoil').value || null;
-  const pname = $('#osName').value.trim();
+  const pname = $('#osName').value.trim();   // 品名は任意（空でも保存できる）
   o.partName = pname;
-  if(pname !== partNameOf(part)) setPartName(part, pname);   // 品名は品番ごとに保存（全端末で共有）
+  if(pname && pname !== partNameOf(part)) setPartName(part, pname);   // 入れた時だけ品番の品名として保存（消すのは設定タブで）
   o.needsInput = false;
   const spm = parseInt($('#osSpm').value), spp = parseInt($('#osSpp').value);
   o.spm = spm > 0 ? spm : null; o.spp = spp > 0 ? spp : null;
@@ -4549,7 +4549,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.38';
+const APP_VERSION = '2026-06-28.39';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
