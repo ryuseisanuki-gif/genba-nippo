@@ -1026,6 +1026,7 @@
       <button class="b-cancel" onclick="closeEndSheet()">キャンセル</button>
       <button class="b-ok" onclick="confirmEnd()">■ 終了して記録</button>
     </div>
+    <button class="carry-finish" style="display:block;width:100%;margin-top:12px" onclick="confirmEnd(true)">個数が分からない：あとで入力して終了する</button>
   </div>
 </div>
 
@@ -1067,6 +1068,7 @@
     <div class="carry-actions">
       <button class="b-ok warn" onclick="submitCarry('carry')">🌙 持ち越して記録</button>
       <button class="carry-finish" onclick="submitCarry('done')">この作業を完了にする</button>
+      <button class="carry-finish" onclick="endLeaveQtyFromCarry()">個数が分からない：あとで入力して終了する</button>
       <button class="carry-finish" onclick="closeCarry()">あとで入力する（閉じる）</button>
     </div>
   </div>
@@ -1779,6 +1781,7 @@ function renderStatus(){
           </div>
           <div style="padding:14px 16px 18px">
             <button class="btn-big btn-pause" onclick="openCarryById('${over.id}')"><span class="ic">✏️</span>本日の個数を入力</button>
+            <button class="carry-finish" style="display:block;width:100%;margin-top:10px" onclick="endLeaveQtyById('${over.id}')">個数が分からない：あとで入力して終了する</button>
           </div>
         </div>`;
       return;
@@ -1880,10 +1883,19 @@ function tickTimer(){
 }
 
 /* ===== START / END ===== */
-function startJob(orderId){
+async function startJob(orderId){
   if(!selectedMachineId){ toast('機械を選んでください','error'); return; }
   if(!scan.partNo){ toast('バーコードを読み取ってください','error'); return; }
-  if(activeFor(selectedMachineId)){ toast('この機械は作業中です','error'); return; }
+  // 前の作業が残っていたら、終了してから始める（個数はあとで入力できるので止まらない）
+  const prev = activeFor(selectedMachineId);
+  if(prev){
+    const ok = await confirmDialog('前の作業が残っています',
+      `${selectedMachineId} に「${prev.partNo||'品番なし'}」（開始 ${fmtDT(prev.startTime)}）が残っています。終了して新しい作業を始めますか？　個数は「記録」タブであとから入力できます。`,
+      '終了して始める');
+    if(!ok) return;
+    const cur = activeFor(selectedMachineId);   // 確認中に他の端末で変わっていないか見る
+    if(cur){ endRecordLeaveQty(cur); planAutoDone(); }
+  }
   const rec = {
     id: uid(),
     machineId: selectedMachineId,
@@ -2457,23 +2469,59 @@ function openEndSheet(){
   setTimeout(()=>$('#endQty').focus(), 250);
 }
 function closeEndSheet(){ $('#endSheet').classList.remove('active'); }
-function confirmEnd(){
-  const r = shownRec();
-  if(!r) { closeEndSheet(); return; }
-  const qv = $('#endQty').value;
-  if(qv==='' || isNaN(parseInt(qv))){ toast('生産個数を入力してください','error'); return; }
+// 個数が分からない時：作業は終了させて「個数未入力」で残す（記録タブであとから入力できる）。
+// 終了できずに記録が残ると、翌朝に自動再開して機械がずっと稼働中に見えてしまうため。
+function endRecordLeaveQty(r){
   const nowIso = new Date().toISOString();
-  const os = openStop(r);
-  if(os) os.to = nowIso;            // close a still-open stop at end time
-  // record today's count as a daily entry, then total them
+  closeAllOpenStops(r, nowIso);
+  const dk = dateKey(new Date());
   r.dailyCounts = r.dailyCounts || [];
-  r.dailyCounts.push({ date: dateKey(new Date()), qty: parseInt(qv), at: nowIso, note:'' });
+  r.pendingDates = r.pendingDates || [];
+  if(!r.dailyCounts.some(x=>x.date===dk) && !r.pendingDates.includes(dk)) r.pendingDates.push(dk);
   r.endTime = nowIso;
   r.lastRunEnd = null;
   r.qty = recordTotalQty(r);
-  r.note = $('#endNote').value.trim();
   r.status = 'done';
   delete r.overnightDate; r.pendingCount = false;
+}
+function endLeaveQtyById(id){
+  const r = store.records.find(x=>x.id===id);
+  if(!r || r.status==='done') return;
+  endRecordLeaveQty(r);
+  planAutoDone();
+  save();
+  closeEndSheet();
+  $('#carrySheet').classList.remove('active'); carryRecordId = null;
+  scan = {raw:'',partNo:'',partName:'',qty:'',due:''};
+  $('#scannedBox').value = '';
+  renderScanned();
+  refreshActiveViews();
+  toast('終了しました。個数は「記録」タブであとから入力できます','success');
+}
+function endLeaveQtyFromCarry(){ endLeaveQtyById(carryRecordId); }
+function confirmEnd(skipQty){
+  const r = shownRec();
+  if(!r) { closeEndSheet(); return; }
+  const qv = $('#endQty').value;
+  const hasQty = !(qv==='' || isNaN(parseInt(qv)));
+  if(!skipQty && !hasQty){ toast('生産個数を入力してください','error'); return; }
+  const nowIso = new Date().toISOString();
+  const note = $('#endNote').value.trim();
+  if(hasQty){
+    closeAllOpenStops(r, nowIso);   // 開いたままの停止は終了時刻で閉じる
+    const dk = dateKey(new Date());
+    r.dailyCounts = r.dailyCounts || [];
+    r.dailyCounts.push({ date: dk, qty: parseInt(qv), at: nowIso, note:'' });
+    r.pendingDates = (r.pendingDates||[]).filter(x=>x!==dk);
+    r.endTime = nowIso;
+    r.lastRunEnd = null;
+    r.qty = recordTotalQty(r);
+    r.status = 'done';
+    delete r.overnightDate; r.pendingCount = false;
+  } else {
+    endRecordLeaveQty(r);
+  }
+  r.note = note;
   planAutoDone();                   // この作業の注文は完了に
   save();
   closeEndSheet();
@@ -2485,10 +2533,11 @@ function confirmEnd(){
   // 次の予定があれば待機中の画面に出ているので、そこへ案内する
   let nx = null;
   try{ nx = nextOrderFor(r.machineId); }catch(e){}
+  const base = hasQty ? '日報を記録しました' : '終了しました。個数は「記録」タブであとから入力できます';
   if(nx && selectedMachineId===r.machineId){
-    toast('日報を記録しました — 次の予定を表示しています','success');
+    toast(base + ' — 次の予定を表示しています','success');
     try{ $('#statusPanel').scrollIntoView({ behavior:'smooth', block:'center' }); }catch(e){}
-  } else toast('日報を記録しました','success');
+  } else toast(base,'success');
 }
 
 /* ===== SCANNER ===== */
@@ -2662,7 +2711,11 @@ function recRange(){
   }
   return {from:null, to:null};
 }
-function recMissingQty(r){ return r.status==='done' && (r.dailyCounts||[]).length<=1 && !(recordTotalQty(r)>0); }
+function recMissingQty(r){
+  if(r.status!=='done') return false;
+  if((r.pendingDates||[]).length > 0) return true;                       // 個数を入れずに終了した日が残っている
+  return (r.dailyCounts||[]).length<=1 && !(recordTotalQty(r)>0);
+}
 
 function renderRecords(){
   const list = $('#recordsList'); if(!list) return;
@@ -2795,7 +2848,7 @@ function recCard(r){
       <div class="rec-cell"><div class="lab">開始</div><div class="val">${fmtDT(r.startTime)}</div></div>
       <div class="rec-cell"><div class="lab">終了</div><div class="val">${r.status==='done'?fmtDT(r.endTime):'—'}</div></div>
       <div class="rec-cell"><div class="lab">${r.status==='done'?'実働日数':'経過'}</div><div class="val">${r.status==='done'? (dc.length+'日') : durLabel(dur)+'〜'}</div></div>
-      <div class="rec-cell"><div class="lab">${dc.length>1?'合計個数':'個数'}</div>${(r.status==='done' && dc.length<=1)?`<input type="number" class="qty-edit${showQty?'':' missing'}" inputmode="numeric" value="${showQty?total:''}" placeholder="個数を入力" onchange="setRecordQty('${r.id}', this.value)">`:`<div class="val qty">${showQty?total.toLocaleString():'—'}</div>`}</div>
+      <div class="rec-cell"><div class="lab">${dc.length>1?'合計個数':'個数'}</div>${(r.status==='done' && (dc.length<=1 || (r.pendingDates||[]).length>0))?`<input type="number" class="qty-edit${showQty && !(r.pendingDates||[]).length?'':' missing'}" inputmode="numeric" value="${(r.pendingDates||[]).length?'':(showQty?total:'')}" placeholder="${(r.pendingDates||[]).length?esc(r.pendingDates[0].slice(5).replace('-','/'))+' の個数を入力':'個数を入力'}" onchange="setRecordQty('${r.id}', this.value)">`:`<div class="val qty">${showQty?total.toLocaleString():'—'}</div>`}</div>
       ${stMin>0?`<div class="rec-cell"><div class="lab">停止合計</div><div class="val stopval">${durLabel(stMin)}</div></div>
       <div class="rec-cell"><div class="lab">正味稼働</div><div class="val">${durLabel(netWorkMin(r))}${active?'〜':''}</div></div>`:''}
     </div>
@@ -3488,10 +3541,12 @@ function setAuto(id, key, val){
 function setRecordQty(id, val){
   const r = store.records.find(x=>x.id===id); if(!r) return;
   const n = parseInt(val); const q = isNaN(n)?0:n;
-  const dk = dateKey(new Date(r.startTime));
+  // 入れる日：ふつうは開始日。個数を入れずに終了した記録は、その未入力の日
+  const dk = (r.pendingDates||[]).length ? r.pendingDates[0] : dateKey(new Date(r.startTime));
   r.dailyCounts = r.dailyCounts || [];
   const i = r.dailyCounts.findIndex(d=>d.date===dk);
   if(i>=0) r.dailyCounts[i].qty = q; else r.dailyCounts.push({ date:dk, qty:q, at:new Date().toISOString() });
+  r.pendingDates = (r.pendingDates||[]).filter(x=>x!==dk);
   r.qty = recordTotalQty(r);
   save(); renderRecords(); renderSummary();
   toast('個数を記録しました','success');
@@ -4402,7 +4457,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.35';
+const APP_VERSION = '2026-06-28.36';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
