@@ -893,6 +893,7 @@
     <button class="sgb sel" id="vtDay" onclick="setSummaryView('day')">日</button>
     <button class="sgb" id="vtMonth" onclick="setSummaryView('month')">月</button>
   </div>
+  <div class="rec-chips" id="sumMachChips"></div>
   <div class="day-nav">
     <button class="day-arrow" onclick="changeSummaryDate(-1)">◀</button>
     <div class="day-label" id="sumDateLabel" onclick="goToday()">—</div>
@@ -1439,6 +1440,7 @@ let selectedCoilId = null;
 let scan = { raw:'', partNo:'', partName:'', qty:'', due:'' };
 let summaryDate = (()=>{ const d=new Date(); d.setHours(0,0,0,0); return d; })();
 let summaryView = 'day';   // 'day' | 'month'
+let sumMachine = '';       // 日別集計で見る機械（''＝全機械）
 
 /* ===== UTILS ===== */
 const pad = n => String(n).padStart(2,'0');
@@ -2883,6 +2885,7 @@ function goToday(){
   renderSummary();
 }
 function setSummaryView(v){ summaryView=v; renderSummary(); }
+function setSumMachine(id){ sumMachine = id; renderSummary(); }
 function pickDay(k){
   const [y,m,d]=k.split('-').map(Number);
   summaryDate=new Date(y,m-1,d); summaryDate.setHours(0,0,0,0);
@@ -3040,8 +3043,12 @@ function machineExistsOn(machineId, dayDate){
 function machinesOn(d){
   return store.machines.filter(m=> machineExistsOn(m.id, d) && !isShutdown(d, m.id));
 }
-function dayAgg(d){
-  const existing = store.machines.filter(m=> machineExistsOn(m.id, d));   // その日に存在した機械
+function dayAgg(d, machineId){
+  let existing = store.machines.filter(m=> machineExistsOn(m.id, d));   // その日に存在した機械
+  if(machineId){
+    existing = existing.filter(m=> m.id===machineId);                   // 機械ごとに見るとき
+    if(!existing.length) return { qty:0, run:0, work:0, recs:0, allShut:false, rate:null, none:true };
+  }
   const active = existing.filter(m=> !isShutdown(d, m.id));
   const allShut = existing.length>0 && active.length===0;
   let qty=0, run=0, work=0, recs=0;
@@ -3079,8 +3086,9 @@ function renderSummaryMonth(){
       cls='shut'; mid='<div class="rt">休業</div>';
       if(off.type==='holiday') sub='<div class="qt">祝日</div>';
     } else if(d.getTime() <= today.getTime()){
-      const a = dayAgg(d);
-      if(a.allShut){ cls='shut'; mid='<div class="rt">休業</div>'; }
+      const a = dayAgg(d, sumMachine);
+      if(a.none){ /* その機械がまだ無かった日は「–」のまま */ }
+      else if(a.allShut){ cls='shut'; mid='<div class="rt">休業</div>'; }
       else{
         const r = a.rate;
         cls = r==null ? 'future' : r>=90 ? 'good' : r>=60 ? 'mid' : 'bad';
@@ -3094,7 +3102,7 @@ function renderSummaryMonth(){
   const avg = mWork>0 ? Math.round(mRun/mWork*100) : null;
   $('#sumDayMeta').className = 'day-meta m3';
   $('#sumDayMeta').innerHTML = `
-    <div class="dm"><div class="lab">月の生産個数</div><div class="val">${mQty.toLocaleString()}<small> 個</small></div></div>
+    <div class="dm"><div class="lab">月の生産個数${sumMachine?'（'+esc(sumMachine)+'）':''}</div><div class="val">${mQty.toLocaleString()}<small> 個</small></div></div>
     <div class="dm"><div class="lab">平均稼働率</div><div class="val">${avg==null?'—':avg+'<small> %</small>'}</div></div>
     <div class="dm"><div class="lab">稼働日数</div><div class="val">${mDays}<small> 日</small></div></div>`;
   $('#summaryMonth').innerHTML = `
@@ -3118,6 +3126,14 @@ function renderSummary(){
   $('#summaryList').style.display  = isMonth ? 'none' : '';
   $('#summaryMonth').style.display = isMonth ? '' : 'none';
   $('#page-summary').classList.toggle('wide', isMonth);   // 月表示はワイド表示
+  // 機械の切り替え（日・月どちらでも効く。''＝全機械）
+  if(sumMachine && !store.machines.some(m=>m.id===sumMachine)) sumMachine = '';
+  const chips = $('#sumMachChips');
+  if(chips){
+    chips.style.display = store.machines.length > 1 ? '' : 'none';
+    chips.innerHTML = [{id:'', label:'全機械'}].concat(store.machines.map(m=>({ id:m.id, label:m.id })))
+      .map(x=>`<button class="rchip${sumMachine===x.id?' sel':''}" onclick="setSumMachine('${esc(x.id)}')">${esc(x.label)}</button>`).join('');
+  }
   if(isMonth){ renderSummaryMonth(); return; }
   $('#sumDayMeta').className = 'day-meta';
 
@@ -3128,13 +3144,13 @@ function renderSummary(){
   $('#sumDateLabel').textContent = fmtDate(d) + (isToday ? '（今日）' : '');
 
   // その日に存在した機械だけを対象にする（後から登録した機械は、それ以前の日の平均に含めない）
-  const existMachines = store.machines.filter(m=> machineExistsOn(m.id, d));
+  const existMachines = store.machines.filter(m=> machineExistsOn(m.id, d) && (!sumMachine || m.id===sumMachine));
   // 休止期間（稼働しない日）は機械ごとに集計対象外
   const activeMachines = existMachines.filter(m=> !isShutdown(d, m.id));
   if(existMachines.length>0 && activeMachines.length===0){
     const sd0 = isShutdown(d, existMachines[0].id);
     $('#sumDayMeta').innerHTML = `<div class="dm" style="grid-column:1/-1"><div class="lab">この日は</div><div class="val">🛌 休業${sd0&&sd0.label?'（'+esc(sd0.label)+'）':''}</div></div>`;
-    $('#summaryList').innerHTML = `<div class="empty"><div class="e-ic">🛌</div><div class="e-t">全機械 休業</div><div class="e-t" style="font-size:12px;color:var(--ink3);font-weight:600">この日は稼働率・平均・目標の対象外です</div></div>`;
+    $('#summaryList').innerHTML = `<div class="empty"><div class="e-ic">🛌</div><div class="e-t">${sumMachine?esc(sumMachine)+' 休業':'全機械 休業'}</div><div class="e-t" style="font-size:12px;color:var(--ink3);font-weight:600">この日は稼働率・平均・目標の対象外です</div></div>`;
     return;
   }
 
@@ -4457,7 +4473,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.36';
+const APP_VERSION = '2026-06-28.37';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
