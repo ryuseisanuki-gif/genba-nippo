@@ -1221,6 +1221,8 @@ const KEY = 'genbaNippoData_v1';
 // 本番で使い始める時は false にする（注文が orders コレクションで全端末に同期される）。
 const PLAN_DEMO = true;
 const PLAN_DEMO_KEY = 'genbaPlanDemo_v1';
+// データが変わるたびに1増やす番号。計算結果を使い回す（キャッシュ）ための目印
+let dataVer = 0;
 
 function load(){
   try{ const s = localStorage.getItem(KEY); if(s) store = JSON.parse(s); }catch(e){}
@@ -1254,6 +1256,7 @@ function load(){
 // 日報の保存にはデモの注文を混ぜない（本番に切り替えた時に勝手に送られないように）
 function storeJson(){ return PLAN_DEMO ? JSON.stringify(Object.assign({}, store, { orders: undefined })) : JSON.stringify(store); }
 function save(){
+  dataVer++;
   try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
   if(PLAN_DEMO){ try{ localStorage.setItem(PLAN_DEMO_KEY, JSON.stringify(store.orders||[])); }catch(e){} }
   if(initialSyncDone) syncPush();
@@ -1324,6 +1327,7 @@ async function loadRecordsRange(fromKey, toKey){
       lastSynced['records/'+doc.id] = JSON.stringify(data);   // 読み込んだだけなので送り返さない
     });
     loadedRanges.push({ from:fromKey, to:toKey });
+    dataVer++;
     if(added) refreshActiveViews();
     return true;
   }catch(e){ console.warn('loadRecordsRange', e); return false; }
@@ -1397,6 +1401,7 @@ function applySnap(kind, snap){
     if(ch.type==='removed'){ if(i>=0) arr.splice(i,1); delete lastSynced[kind+'/'+id]; }
     else { if(i>=0) arr[i] = data; else arr.push(data); lastSynced[kind+'/'+id] = JSON.stringify(data); }
   });
+  dataVer++;
   try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
   firstSnap[kind] = true;
   if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns && firstSnap.workdays){
@@ -2444,18 +2449,27 @@ function refreshActiveViews(){
   if($('#endSheet').classList.contains('active') && !shownRec()){
     closeEndSheet(); toast('他の端末で作業が終了されました','error');
   }
-  if($('#page-summary').classList.contains('active')) renderSummary();
-  if($('#page-records').classList.contains('active')) renderRecords();
-  if($('#page-plan').classList.contains('active')){   // 他端末で入れた注文・予定も反映
-    try{ renderPlan(); }catch(e){ console.warn('renderPlan', e); }   // 予定の不具合で他の画面の更新を止めない
-  }
-  if($('#page-settings').classList.contains('active')){
-    renderMachineSettings();
-    renderCoilSettings();
-    renderPartNames();
-    renderAutoSettings();
-    renderShutdownSettings();   // 他端末で追加/編集した休止期間もリアルタイム反映
-  }
+  refreshHeavyViews();
+}
+// 集計・記録・予定・設定は描くのに時間がかかるので、同期が続けて来ても少し待ってから1回だけ描く
+let _heavyT = 0;
+function refreshHeavyViews(){
+  clearTimeout(_heavyT);
+  _heavyT = setTimeout(()=>{
+    _heavyT = 0;
+    if($('#page-summary').classList.contains('active')) renderSummary();
+    if($('#page-records').classList.contains('active')) renderRecords();
+    if($('#page-plan').classList.contains('active')){   // 他端末で入れた注文・予定も反映
+      try{ renderPlan(); }catch(e){ console.warn('renderPlan', e); }   // 予定の不具合で他の画面の更新を止めない
+    }
+    if($('#page-settings').classList.contains('active')){
+      renderMachineSettings();
+      renderCoilSettings();
+      renderPartNames();
+      renderAutoSettings();
+      renderShutdownSettings();   // 他端末で追加/編集した休止期間もリアルタイム反映
+    }
+  }, 250);
 }
 // periodic + on-demand boundary check (non-blocking: just notify, never auto-popup)
 // 休憩の自動停止/再開（12:00-12:45, 15:00-15:15）。アプリが開いている間だけ動作（集計は常に休憩控除）。
@@ -2496,6 +2510,18 @@ function processBreaks(){
   });
   if(changed) save();
   return changed;
+}
+// 休憩の開始・終了や始業・終業の時刻ぴったりに動かす（30秒ごとの見回りだと最大30秒遅れるため）
+let boundaryTimer = null;
+function scheduleBoundaryTick(){
+  const now = new Date();
+  const marks = [];
+  BREAKS.forEach(b=>{ marks.push(atHour(now, b.sh, b.sm).getTime(), atHour(now, b.eh, b.em).getTime()); });
+  marks.push(stdStart(now).getTime(), stdEnd(now).getTime());
+  let next = null;
+  marks.forEach(t=>{ const x = t + 1200; if(x > Date.now() && (next===null || x < next)) next = x; });
+  if(boundaryTimer) clearTimeout(boundaryTimer);
+  if(next !== null) boundaryTimer = setTimeout(()=>{ tickBoundaries(); scheduleBoundaryTick(); }, Math.max(500, next - Date.now()));
 }
 function tickBoundaries(){
   const changed = processDayBoundaries();
@@ -2965,7 +2991,17 @@ function breakWindowAt(dayDate, t){
   return null;
 }
 // 9:00–17:00 を1分刻みで判定（run/stop/remain）。休憩は常に stop（＝強制停止）。数値・帯グラフ共通。
+// 過ぎた日の計算結果は覚えておき、記録が変わるまで使い回す（集計画面が重くならないように）
+let _mdsCache = { sig:null, map:{} };
 function machineDayStates(machineId, dayDate){
+  const dk = dateKey(dayDate);
+  if(dk >= dateKey(new Date())) return machineDayStatesRaw(machineId, dayDate);   // 今日・未来は毎回計算
+  const sig = planSig();
+  if(_mdsCache.sig !== sig) _mdsCache = { sig, map:{} };
+  const k = machineId + '|' + dk;
+  return _mdsCache.map[k] || (_mdsCache.map[k] = machineDayStatesRaw(machineId, dayDate));
+}
+function machineDayStatesRaw(machineId, dayDate){
   const ws=stdStart(dayDate); const wsT=ws.getTime();
   const weFull=stdEnd(dayDate); const weFullT=weFull.getTime();
   const now=Date.now();
@@ -3804,14 +3840,8 @@ function posLatest(dueKey, need, machineId){
 
 /* 機械×日ごとの「動いていた分・個数・作った品番」（昨日まで）。記録が変わった時だけ作り直す */
 let _planStats = { sig:null, data:{} };
-function planSig(){
-  let h = 0;
-  store.records.forEach(r=>{
-    const q = (r.dailyCounts||[]).reduce((x,d)=>x+(d.qty||0), 0);
-    h = (h*31 + q + (r.stops ? r.stops.length*7 : 0) + (r.endTime ? 3 : 0) + (r.spm||0) + (r.spp||0) + (r.partNo||'').length) % 1000000007;
-  });
-  return [store.records.length, dateKey(new Date()), (store.shutdowns||[]).length, (store.workdays||[]).length, h].join('|');
-}
+// データが変わったか・日付が変わったかの目印（計算結果の使い回しに使う）
+function planSig(){ return dataVer + '|' + dateKey(new Date()); }
 function planStats(){
   const sig = planSig();
   if(_planStats.sig === sig) return _planStats.data;
@@ -4549,7 +4579,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.39';
+const APP_VERSION = '2026-06-28.40';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -4610,7 +4640,15 @@ function init(){
   const av = $('#appVer'); if(av) av.textContent = APP_VERSION;
   checkForUpdate();                                          // 起動時に新版チェック
   setInterval(checkForUpdate, 90000);                        // 90秒ごとにチェック
-  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkForUpdate(); });
+  scheduleBoundaryTick();                                    // 休憩の開始・終了ぴったりに反映する
+  // 画面を見た瞬間に最新にする（スリープ中はタイマーが止まるので、休憩明けの反映が遅れて見えていた）
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.hidden) return;
+    checkForUpdate();
+    tickBoundaries();
+    scheduleBoundaryTick();
+    clockTick();
+  });
   window.addEventListener('pageshow', checkForUpdate);       // iOSの復帰（bfcache）対策
   window.addEventListener('focus', checkForUpdate);
   window.addEventListener('online', checkForUpdate);         // 圏外から戻った時
