@@ -1518,6 +1518,22 @@ function openStops(r){ return (r && r.stops) ? r.stops.filter(s=>!s.to) : []; }
 function closeAllOpenStops(r, iso){ let n=0; openStops(r).forEach(s=>{ s.to = iso; n++; }); return n; }
 // 「稼働中なのに閉じ忘れの停止が残っている」記録を自動で直す。
 // 複数端末が同時に停止/再開を押すと発生し、放置すると稼働率が下がり続ける。
+// 個数を入れた日が「未入力」の印に残っていたら消す（古い版の取りこぼしを直す）
+function healPendingDates(){
+  let n = 0;
+  store.records.forEach(r=>{
+    if(!(r.pendingDates||[]).length || !(r.dailyCounts||[]).length) return;
+    const before = r.pendingDates.length;
+    r.pendingDates = r.pendingDates.filter(d=> !r.dailyCounts.some(c=>c.date===d));
+    if(r.pendingDates.length !== before){
+      r.pendingCount = r.status!=='done' && r.pendingDates.length>0;
+      if(!r.pendingDates.length) delete r.overnightDate;
+      n++;
+    }
+  });
+  if(n) save();
+  return n;
+}
 function healOpenStops(){
   const nowIso = new Date().toISOString();
   let fixed = 0;
@@ -1717,6 +1733,8 @@ function setPartName(partNo, name){
   renderPartHistory();
   if($('#page-plan') && $('#page-plan').classList.contains('active')){ try{ renderPlan(); }catch(e){} }
 }
+// 記録に品名が入っていなければ、品番に登録された品名を使う
+function recPartName(r){ return (r && (r.partName||'').trim()) || (r ? partNameOf(r.partNo) : '') || ''; }
 // 今までに出てきた品番（新しく使った順）
 function allPartNos(){
   const seen = new Map();
@@ -1788,7 +1806,7 @@ function renderStatus(){
         <div class="st-strip"><span class="d"></span>稼働中 — ${esc(run.machineId)}${multi?` ・ ${days+1}日目`:''}</div>
         <div class="st-body">
           <div class="timer" id="liveTimer">00:00:00</div>
-          <div class="timer-sub">品番 <b>${esc(run.partNo)}</b>${run.partName?' / '+esc(run.partName):''}<br>開始 <b>${fmtDT(run.startTime)}</b>${multi?` ・ 本日分 ・ 累計 <b>${prior.toLocaleString()}</b>個`:''}${stMin>0?` ・ 停止累計 <b>${durLabel(stMin)}</b>`:''}</div>
+          <div class="timer-sub">品番 <b>${esc(run.partNo)}</b>${recPartName(run)?' / '+esc(recPartName(run)):''}<br>開始 <b>${fmtDT(run.startTime)}</b>${multi?` ・ 本日分 ・ 累計 <b>${prior.toLocaleString()}</b>個`:''}${stMin>0?` ・ 停止累計 <b>${durLabel(stMin)}</b>`:''}</div>
         </div>
         <div style="padding:0 16px 18px">
           ${pendingNote(run)}
@@ -1812,7 +1830,7 @@ function renderStatus(){
         <div class="st-body">
           <div class="timer paused" id="liveTimer">00:00:00</div>
           <div class="stop-reason-tag">${isBreakStop?'☕ 休憩中 — 動かす場合は「再開」を押してください':'⏸ '+esc(os.reason||'停止')+(os.detail?'：'+esc(os.detail):'')}</div>
-          <div class="timer-sub">品番 <b>${esc(paused.partNo)}</b>${paused.partName?' / '+esc(paused.partName):''}<br>開始 <b>${fmtT(paused.startTime)}</b> ・ 停止 <b>${os.from?fmtT(os.from):'-'}</b></div>
+          <div class="timer-sub">品番 <b>${esc(paused.partNo)}</b>${recPartName(paused)?' / '+esc(recPartName(paused)):''}<br>開始 <b>${fmtT(paused.startTime)}</b> ・ 停止 <b>${os.from?fmtT(os.from):'-'}</b></div>
         </div>
         <div style="padding:0 16px 18px">
           <div class="btn-row">
@@ -1836,7 +1854,7 @@ function renderStatus(){
           <div class="over-body">
             <div class="over-icon">🌙</div>
             <div class="over-title" style="color:var(--pause-d)">本日のカウンター数が未入力</div>
-            <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>${stdEndLabel(new Date(over.lastRunEnd||Date.now()))}で本日終了になりました。本日の生産個数を入力してください。</div>
+            <div class="over-info">品番 <b>${esc(over.partNo)}</b>${recPartName(over)?' / '+esc(recPartName(over)):''}<br>${stdEndLabel(new Date(over.lastRunEnd||Date.now()))}で本日終了になりました。本日の生産個数を入力してください。</div>
           </div>
           <div style="padding:14px 16px 18px">
             <button class="btn-big btn-pause" onclick="openCarryById('${over.id}')"><span class="ic">✏️</span>本日の個数を入力</button>
@@ -1851,7 +1869,7 @@ function renderStatus(){
         <div class="over-body">
           <div class="over-icon">🌙</div>
           <div class="over-title">翌営業日 ${stdStartLabel(new Date(Date.now()+86400000))} に自動再開</div>
-          <div class="over-info">品番 <b>${esc(over.partNo)}</b>${over.partName?' / '+esc(over.partName):''}<br>${dc.length}日目まで完了 ・ 累計 <b>${prior.toLocaleString()}</b> 個</div>
+          <div class="over-info">品番 <b>${esc(over.partNo)}</b>${recPartName(over)?' / '+esc(recPartName(over)):''}<br>${dc.length}日目まで完了 ・ 累計 <b>${prior.toLocaleString()}</b> 個</div>
           ${last?`<div class="over-count">本日(${esc((last.date||'').replace(/-/g,'/'))}) <b>${(last.qty||0).toLocaleString()}</b> 個</div>`:''}
         </div>
         <div style="padding:14px 16px 18px">
@@ -1942,7 +1960,11 @@ function tickTimer(){
 }
 
 /* ===== START / END ===== */
+let startBusy = false;   // 開始ボタンの二度押し防止（確認の最中に二重に押されるのを防ぐ）
 async function startJob(orderId){
+  if(startBusy) return;
+  startBusy = true;
+  setTimeout(()=>{ startBusy = false; }, 800);
   if(!selectedMachineId){ toast('機械を選んでください','error'); return; }
   if(!scan.partNo){ toast('バーコードを読み取ってください','error'); return; }
   // 前の作業が残っていたら、終了してから始める（個数はあとで入力できるので止まらない）
@@ -2215,7 +2237,7 @@ function autoRecId(machineId, dayDate){
 function newAutoRecord(m, a, startDate, endDate){
   return {
     id: autoRecId(m.id, startDate), machineId: m.id, auto: true,
-    partNo: a.partNo||'', partName:'', rawScan: a.partNo||'',
+    partNo: a.partNo||'', partName: partNameOf(a.partNo||''), rawScan: a.partNo||'',
     indicatedQty:'', due:'',
     startTime: startDate.toISOString(), sessionStart: startDate.toISOString(),
     endTime: endDate ? endDate.toISOString() : null,
@@ -2526,7 +2548,7 @@ function scheduleBoundaryTick(){
 function tickBoundaries(){
   const changed = processDayBoundaries();
   const brk = processBreaks();
-  const heal = healOpenStops();     // 閉じ忘れの停止を自動で直す
+  const heal = healOpenStops() + healPendingDates();   // 閉じ忘れの停止・未入力の印の取りこぼしを直す
   const auto = processAutoDaily();
   notifyLongStops();                // 再開の押し忘れを知らせる
   if(changed || brk || heal || auto){ refreshActiveViews(); notifyPendingCarry(); }
@@ -2921,7 +2943,7 @@ function recCard(r){
       <div>
         <span class="rec-mid">${esc(r.machineId)}</span>
         <div class="rec-part">${esc(r.partNo)}</div>
-        ${r.partName?`<div class="rec-pname">${esc(r.partName)}</div>`:''}
+        ${recPartName(r)?`<div class="rec-pname">${esc(recPartName(r))}</div>`:''}
       </div>
       <span class="rec-badge ${badge[0]}">${badge[1]}</span>
     </div>
@@ -3441,7 +3463,7 @@ function exportCSV(){
     const daily = dc.map(d=>`${(d.date||'').replace(/-/g,'/')}:${d.qty||0}`).join(' / ');
     const total = recordTotalQty(r);
     return [
-      r.machineId, machineName(r.machineId), r.partNo, r.partName||'', r.rawScan||'',
+      r.machineId, machineName(r.machineId), r.partNo, recPartName(r), r.rawScan||'',
       r.indicatedQty||'', r.due||'',
       r.startTime?fmtFull(r.startTime):'', r.endTime?fmtFull(r.endTime):'',
       dc.length||'', dur, stops.length, (stops.length?stMin:''), net,
@@ -4579,7 +4601,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.40';
+const APP_VERSION = '2026-06-28.41';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
