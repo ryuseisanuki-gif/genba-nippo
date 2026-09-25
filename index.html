@@ -1216,6 +1216,16 @@
 "use strict";
 const $ = s => document.querySelector(s);
 
+/* ===== 時計のずれを直した時刻（いちばん先に用意する） =====
+   端末の時計が数分ずれていても記録の時刻がずれないように、
+   サーバー（GitHub Pages）の時刻との差を覚えて、その分だけ直した時刻を使う。 */
+const CLOCK_KEY = 'genbaClockOff';
+let clockOffSec = (()=>{ try{ const v = parseFloat(localStorage.getItem(CLOCK_KEY)); return isFinite(v) ? v : 0; }catch(e){ return 0; } })();
+function rawNowMs(){ return /*RAW*/Date.now(); }        // 端末の時計そのもの（ずれを測る時だけ使う）
+function nowMs(){ return rawNowMs() - clockOffSec*1000; }
+function nowDate(){ return new Date(nowMs()); }
+function nowIso(){ return nowDate().toISOString(); }
+
 /* ===== STORE ===== */
 let store = { machines: [], records: [], coils: [], shutdowns: [], workdays: [], orders: [], parts: [] };
 const KEY = 'genbaNippoData_v1';
@@ -1299,7 +1309,7 @@ let recentFallbackDone = false;
 const archiveIds = new Set();            // 古いのに読み込んだ記録（勝手に捨てない目印）
 const loadedRanges = [];                 // 追加取得済みの期間 [{from,to}]
 let loadingArchive = false;
-function recentCutoff(){ const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-RECENT_DAYS); return d; }
+function recentCutoff(){ const d = nowDate(); d.setHours(0,0,0,0); d.setDate(d.getDate()-RECENT_DAYS); return d; }
 function recentCutoffIso(){ return recentCutoff().toISOString(); }
 function rangeLoaded(fromKey, toKey){
   if(!recentOnly) return true;
@@ -1459,7 +1469,7 @@ function delDoc(kind, id){
 let selectedMachineId = null;
 let selectedCoilId = null;
 let scan = { raw:'', partNo:'', partName:'', qty:'', due:'' };
-let summaryDate = (()=>{ const d=new Date(); d.setHours(0,0,0,0); return d; })();
+let summaryDate = (()=>{ const d=nowDate(); d.setHours(0,0,0,0); return d; })();
 let summaryView = 'day';   // 'day' | 'month'
 let sumMachine = '';       // 日別集計で見る機械（''＝全機械）
 
@@ -1488,10 +1498,10 @@ function fmtT(iso){ const d=new Date(iso); return `${pad(d.getHours())}:${pad(d.
 function durMin(a,b){ return Math.max(0, Math.round((new Date(b)-new Date(a))/60000)); }
 function durLabel(min){ const h=Math.floor(min/60), m=min%60; return h>0?`${h}時間${pad(m)}分`:`${m}分`; }
 function elapsedClock(fromIso){
-  const s = Math.max(0, Math.floor((Date.now()-new Date(fromIso))/1000));
+  const s = Math.max(0, Math.floor((nowMs()-new Date(fromIso))/1000));
   return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`;
 }
-function uid(){ return 'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+function uid(){ return 'r'+nowMs().toString(36)+Math.random().toString(36).slice(2,6); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 let toastT;
@@ -1537,7 +1547,7 @@ function healPendingDates(){
   return n;
 }
 function healOpenStops(){
-  const nowIso = new Date().toISOString();
+  const nowIso = nowDate().toISOString();
   let fixed = 0;
   store.records.forEach(r=>{
     if(r.status!=='running') return;      // 停止中の記録は開いていて当然
@@ -1555,7 +1565,7 @@ function stdEnd(d){   const s=stdFor(d); return atHour(d, s.eh, s.em); }   // �
 function endRefT(r){
   if(r.endTime) return new Date(r.endTime).getTime();
   if(r.lastRunEnd) return new Date(r.lastRunEnd).getTime();
-  return Date.now();
+  return nowMs();
 }
 function cutoffT(r){
   const ss = new Date(r.sessionStart||r.startTime);
@@ -1729,8 +1739,8 @@ function setPartName(partNo, name){
   name = String(name||'').trim();
   store.parts = store.parts || [];
   const i = store.parts.findIndex(x=> x.partNo === partNo);
-  if(i>=0){ store.parts[i].name = name; store.parts[i].at = new Date().toISOString(); }
-  else store.parts.push({ id: partIdOf(partNo), partNo, name, at: new Date().toISOString() });
+  if(i>=0){ store.parts[i].name = name; store.parts[i].at = nowDate().toISOString(); }
+  else store.parts.push({ id: partIdOf(partNo), partNo, name, at: nowDate().toISOString() });
   save();
   renderPartHistory();
   if($('#page-plan') && $('#page-plan').classList.contains('active')){ try{ renderPlan(); }catch(e){} }
@@ -1856,7 +1866,7 @@ function renderStatus(){
           <div class="over-body">
             <div class="over-icon">🌙</div>
             <div class="over-title" style="color:var(--pause-d)">本日のカウンター数が未入力</div>
-            <div class="over-info">品番 <b>${esc(over.partNo)}</b>${recPartName(over)?' / '+esc(recPartName(over)):''}<br>${stdEndLabel(new Date(over.lastRunEnd||Date.now()))}で本日終了になりました。本日の生産個数を入力してください。</div>
+            <div class="over-info">品番 <b>${esc(over.partNo)}</b>${recPartName(over)?' / '+esc(recPartName(over)):''}<br>${stdEndLabel(new Date(over.lastRunEnd||nowMs()))}で本日終了になりました。本日の生産個数を入力してください。</div>
           </div>
           <div style="padding:14px 16px 18px">
             <button class="btn-big btn-pause" onclick="openCarryById('${over.id}')"><span class="ic">✏️</span>本日の個数を入力</button>
@@ -1870,7 +1880,7 @@ function renderStatus(){
         <div class="st-strip"><span class="d"></span>本日終了（持ち越し） — ${esc(over.machineId)}</div>
         <div class="over-body">
           <div class="over-icon">🌙</div>
-          <div class="over-title">翌営業日 ${stdStartLabel(new Date(Date.now()+86400000))} に自動再開</div>
+          <div class="over-title">翌営業日 ${stdStartLabel(new Date(nowMs()+86400000))} に自動再開</div>
           <div class="over-info">品番 <b>${esc(over.partNo)}</b>${recPartName(over)?' / '+esc(recPartName(over)):''}<br>${dc.length}日目まで完了 ・ 累計 <b>${prior.toLocaleString()}</b> 個</div>
           ${last?`<div class="over-count">本日(${esc((last.date||'').replace(/-/g,'/'))}) <b>${(last.qty||0).toLocaleString()}</b> 個</div>`:''}
         </div>
@@ -1917,7 +1927,7 @@ function manualResume(){
   const r = shownWith('overnight');
   if(!r) return;
   r.status = 'running';
-  r.sessionStart = new Date().toISOString();
+  r.sessionStart = nowDate().toISOString();
   r.lastRunEnd = null;
   r.pendingCount = false;
   delete r.overnightDate;
@@ -1987,8 +1997,8 @@ async function startJob(orderId){
     rawScan: scan.raw||scan.partNo,
     indicatedQty: scan.qty||'',
     due: scan.due||'',
-    startTime: new Date().toISOString(),
-    sessionStart: new Date().toISOString(),
+    startTime: nowDate().toISOString(),
+    sessionStart: nowDate().toISOString(),
     endTime: null,
     lastRunEnd: null,
     qty: null,
@@ -2049,7 +2059,7 @@ function quickStop(){
   const run = shownRunning();
   if(!run) return;
   const reason = topStopReason(run.machineId);
-  const nowIso = new Date().toISOString();
+  const nowIso = nowDate().toISOString();
   closeAllOpenStops(run, nowIso);
   run.stops = run.stops || [];
   run.stops.push({ reason, detail:'', from: nowIso, to: null });
@@ -2086,7 +2096,7 @@ function confirmStop(){
   const chip = document.querySelector('#stopChips .chip.sel');
   if(!chip){ toast('停止の理由を選んでください','error'); return; }
   const reason = chip.textContent;
-  const nowIso = new Date().toISOString();
+  const nowIso = nowDate().toISOString();
   closeAllOpenStops(run, nowIso);   // 閉じ忘れが残っていたらここで閉じる（停止が二重に開かないように）
   run.stops.push({ reason, detail: $('#stopDetail').value.trim(), from: nowIso, to: null });
   run.status = 'stopped';
@@ -2107,7 +2117,7 @@ function resumeJob(){
   if(!r) return;
   // 開いている停止は「全部」閉じる。1つだけ閉じると、他端末が同時に作った停止が
   // 取り残されて「稼働中なのに止まっている」状態が続いてしまう
-  closeAllOpenStops(r, new Date().toISOString());
+  closeAllOpenStops(r, nowDate().toISOString());
   r.status = 'running';
   save();
   toast('作業を再開しました','success');
@@ -2117,7 +2127,7 @@ function resumeJob(){
 
 /* ===== DAY BOUNDARIES (17:00 auto end-of-day / 9:00 auto resume) ===== */
 function processDayBoundaries(){
-  const now = Date.now();
+  const now = nowMs();
   let changed = false;
   // (1) Past 17:00 → running/stopped jobs become overnight (await today's count)
   store.records.forEach(r=>{
@@ -2142,12 +2152,12 @@ function processDayBoundaries(){
   // 前日の個数が未入力でも再開する（朝の操作をなくす。個数は後から入力できる）
   store.records.forEach(r=>{
     if(r.status!=='overnight') return;
-    const todayKey = dateKey(new Date());
-    const nine = stdStart(new Date()).getTime();
-    const base = r.overnightDate || (r.pendingDates||[])[0] || dateKey(new Date(r.lastRunEnd||Date.now()));
-    if(base && todayKey > base && now >= nine && !offDay(new Date())){
+    const todayKey = dateKey(nowDate());
+    const nine = stdStart(nowDate()).getTime();
+    const base = r.overnightDate || (r.pendingDates||[])[0] || dateKey(new Date(r.lastRunEnd||nowMs()));
+    if(base && todayKey > base && now >= nine && !offDay(nowDate())){
       r.status = 'running';
-      r.sessionStart = stdStart(new Date()).toISOString();
+      r.sessionStart = stdStart(nowDate()).toISOString();
       r.lastRunEnd = null;
       if(!(r.pendingDates||[]).length){ r.pendingCount = false; delete r.overnightDate; }
       changed = true;
@@ -2225,7 +2235,7 @@ function offDay(dayDate){
 function setWorkday(dk, on){
   store.workdays = store.workdays || [];
   const i = store.workdays.findIndex(w=>w.id===dk);
-  if(on){ if(i<0) store.workdays.push({ id:dk, date:dk, at:new Date().toISOString() }); }
+  if(on){ if(i<0) store.workdays.push({ id:dk, date:dk, at:nowDate().toISOString() }); }
   else if(i>=0){ store.workdays.splice(i,1); delDoc('workdays', dk); }
   save(); processAutoDaily(); refreshActiveViews();
   toast(on ? 'この日を稼働日にしました' : '休業に戻しました', 'success');
@@ -2322,13 +2332,13 @@ function hasRecordOn(machineId, dayDate){
 // 自動記録を新しく作ってよいか（同期未完了・休業・既に作業中・同じIDが既にある場合は作らない）
 function canMakeAuto(m, todays, shut){
   if(!autoCreateReady || shut || todays.length>0 || activeFor(m.id)) return false;
-  const today = new Date(); today.setHours(0,0,0,0);
+  const today = nowDate(); today.setHours(0,0,0,0);
   if(store.records.some(r=> r.id === autoRecId(m.id, today))) return false;
   return !hasRecordOn(m.id, today);   // 手動で開始した記録がある日は自動記録を作らない
 }
 function processAutoDaily(){
-  const now = Date.now();
-  const today = new Date(); today.setHours(0,0,0,0);
+  const now = nowMs();
+  const today = nowDate(); today.setHours(0,0,0,0);
   const nine = stdStart(today);
   const seventeen = stdEnd(today);
   const dk = dateKey(today);
@@ -2381,7 +2391,7 @@ let carryRecordId = null;
 function openCarrySheet(r){
   carryRecordId = r.id;
   const dlabel = r.overnightDate ? r.overnightDate.replace(/-/g,'/') : '';
-  $('#carryMsg').textContent = `${stdEndLabel(new Date(r.lastRunEnd||Date.now()))}を過ぎたため ${r.machineId} は本日終了になりました。本日のカウンター数（この日の生産個数）を入力してください。`;
+  $('#carryMsg').textContent = `${stdEndLabel(new Date(r.lastRunEnd||nowMs()))}を過ぎたため ${r.machineId} は本日終了になりました。本日のカウンター数（この日の生産個数）を入力してください。`;
   const prior = (r.dailyCounts||[]).reduce((s,d)=>s+(d.qty||0),0);
   $('#carryRecap').innerHTML =
     `機械 <b>${esc(r.machineId)}</b> ／ 品番 <b>${esc(r.partNo)}</b><br>対象日 <b>${esc(dlabel)}</b>`+
@@ -2406,7 +2416,7 @@ function notifyPendingCarry(){
 const LONG_STOP_MIN = 30;
 const longStopNotified = {};
 function notifyLongStops(){
-  const now = Date.now();
+  const now = nowMs();
   store.records.forEach(r=>{
     if(r.status!=='stopped') return;
     const os = openStop(r); if(!os || os.reason==='休憩') return;
@@ -2433,19 +2443,19 @@ function submitCarry(action){
   if(!r){ $('#carrySheet').classList.remove('active'); return; }
   const qv = $('#carryQty').value;
   if(qv==='' || isNaN(parseInt(qv))){ toast('本日の個数を入力してください','error'); return; }
-  const dk = r.overnightDate || (r.pendingDates||[])[0] || dateKey(new Date(r.lastRunEnd||Date.now()));
+  const dk = r.overnightDate || (r.pendingDates||[])[0] || dateKey(new Date(r.lastRunEnd||nowMs()));
   r.dailyCounts = r.dailyCounts || [];
   r.dailyCounts.push({
     date: dk,
     qty: parseInt(qv),
-    at: new Date().toISOString(),
+    at: nowDate().toISOString(),
     note: $('#carryNote').value.trim()
   });
   r.pendingDates = (r.pendingDates||[]).filter(x=>x!==dk);
   r.pendingCount = r.pendingDates.length > 0;
   if(r.pendingCount) r.overnightDate = r.pendingDates[0]; else delete r.overnightDate;
   if(action==='done'){
-    r.endTime = r.lastRunEnd || new Date().toISOString();
+    r.endTime = r.lastRunEnd || nowDate().toISOString();
     r.qty = recordTotalQty(r);
     r.status = 'done';
     r.lastRunEnd = null;
@@ -2455,7 +2465,7 @@ function submitCarry(action){
   save();
   $('#carrySheet').classList.remove('active');
   carryRecordId = null;
-  toast(action==='done' ? '作業を完了しました' : `本日分を記録しました（翌営業日${stdStartLabel(new Date(Date.now()+86400000))}に自動再開）`, 'success');
+  toast(action==='done' ? '作業を完了しました' : `本日分を記録しました（翌営業日${stdStartLabel(new Date(nowMs()+86400000))}に自動再開）`, 'success');
   processDayBoundaries();
   refreshActiveViews();
   notifyPendingCarry();
@@ -2499,11 +2509,11 @@ function refreshHeavyViews(){
 // periodic + on-demand boundary check (non-blocking: just notify, never auto-popup)
 // 休憩の自動停止/再開（12:00-12:45, 15:00-15:15）。アプリが開いている間だけ動作（集計は常に休憩控除）。
 function processBreaks(){
-  const now = Date.now();
+  const now = nowMs();
   let changed = false;
   BREAKS.forEach(b=>{
-    const bs=new Date(); bs.setHours(b.sh,b.sm,0,0); const bsT=bs.getTime();
-    const be=new Date(); be.setHours(b.eh,b.em,0,0); const beT=be.getTime();
+    const bs=nowDate(); bs.setHours(b.sh,b.sm,0,0); const bsT=bs.getTime();
+    const be=nowDate(); be.setHours(b.eh,b.em,0,0); const beT=be.getTime();
     if(now >= bsT && now < beT){
       // 休憩中：稼働中の作業を「休憩」で自動停止
       store.records.forEach(r=>{
@@ -2539,14 +2549,14 @@ function processBreaks(){
 // 休憩の開始・終了や始業・終業の時刻ぴったりに動かす（30秒ごとの見回りだと最大30秒遅れるため）
 let boundaryTimer = null;
 function scheduleBoundaryTick(){
-  const now = new Date();
+  const now = nowDate();
   const marks = [];
   BREAKS.forEach(b=>{ marks.push(atHour(now, b.sh, b.sm).getTime(), atHour(now, b.eh, b.em).getTime()); });
   marks.push(stdStart(now).getTime(), stdEnd(now).getTime());
   let next = null;
-  marks.forEach(t=>{ const x = t + 1200; if(x > Date.now() && (next===null || x < next)) next = x; });
+  marks.forEach(t=>{ const x = t + 1200; if(x > nowMs() && (next===null || x < next)) next = x; });
   if(boundaryTimer) clearTimeout(boundaryTimer);
-  if(next !== null) boundaryTimer = setTimeout(()=>{ tickBoundaries(); scheduleBoundaryTick(); }, Math.max(500, next - Date.now()));
+  if(next !== null) boundaryTimer = setTimeout(()=>{ tickBoundaries(); scheduleBoundaryTick(); }, Math.max(500, next - nowMs()));
 }
 function tickBoundaries(){
   const changed = processDayBoundaries();
@@ -2567,7 +2577,7 @@ function openEndSheet(){
   $('#endRecap').innerHTML =
     `機械 <b>${esc(r.machineId)}</b> ／ 品番 <b>${esc(r.partNo)}</b><br>`+
     `開始 <b>${fmtDT(r.startTime)}</b>`+
-    (multi ? `<br>前日までの累計 <b>${prior.toLocaleString()}</b> 個` : ` ・ 経過 <b>${durLabel(durMin(r.startTime, Date.now()))}</b>`)+
+    (multi ? `<br>前日までの累計 <b>${prior.toLocaleString()}</b> 個` : ` ・ 経過 <b>${durLabel(durMin(r.startTime, nowMs()))}</b>`)+
     (stMin>0?`<br>停止 <b>${durLabel(stMin)}</b>`:'');
   $('#endQty').value = multi ? '' : (r.indicatedQty || '');
   $('#endNote').value = '';
@@ -2578,9 +2588,9 @@ function closeEndSheet(){ $('#endSheet').classList.remove('active'); }
 // 個数が分からない時：作業は終了させて「個数未入力」で残す（記録タブであとから入力できる）。
 // 終了できずに記録が残ると、翌朝に自動再開して機械がずっと稼働中に見えてしまうため。
 function endRecordLeaveQty(r){
-  const nowIso = new Date().toISOString();
+  const nowIso = nowDate().toISOString();
   closeAllOpenStops(r, nowIso);
-  const dk = dateKey(new Date());
+  const dk = dateKey(nowDate());
   r.dailyCounts = r.dailyCounts || [];
   r.pendingDates = r.pendingDates || [];
   if(!r.dailyCounts.some(x=>x.date===dk) && !r.pendingDates.includes(dk)) r.pendingDates.push(dk);
@@ -2611,11 +2621,11 @@ function confirmEnd(skipQty){
   const qv = $('#endQty').value;
   const hasQty = !(qv==='' || isNaN(parseInt(qv)));
   if(!skipQty && !hasQty){ toast('生産個数を入力してください','error'); return; }
-  const nowIso = new Date().toISOString();
+  const nowIso = nowDate().toISOString();
   const note = $('#endNote').value.trim();
   if(hasQty){
     closeAllOpenStops(r, nowIso);   // 開いたままの停止は終了時刻で閉じる
-    const dk = dateKey(new Date());
+    const dk = dateKey(nowDate());
     r.dailyCounts = r.dailyCounts || [];
     r.dailyCounts.push({ date: dk, qty: parseInt(qv), at: nowIso, note:'' });
     r.pendingDates = (r.pendingDates||[]).filter(x=>x!==dk);
@@ -2808,7 +2818,7 @@ function toggleRecRow(id){ if(recOpen.has(id)) recOpen.delete(id); else recOpen.
 
 // 期間の範囲（from/to は日付キー。null は無制限）
 function recRange(){
-  const t = new Date(); t.setHours(0,0,0,0);
+  const t = nowDate(); t.setHours(0,0,0,0);
   if(recPeriod==='week'){ const s=new Date(t); s.setDate(s.getDate()-((s.getDay()+6)%7)); return {from:dateKey(s), to:null}; }  // 月曜始まり
   if(recPeriod==='month'){ return {from:dateKey(new Date(t.getFullYear(),t.getMonth(),1)), to:null}; }
   if(recPeriod==='prev'){
@@ -2985,7 +2995,7 @@ function changeSummaryDate(delta){
   renderSummary();
 }
 function goToday(){
-  const d=new Date(); d.setHours(0,0,0,0); summaryDate=d;
+  const d=nowDate(); d.setHours(0,0,0,0); summaryDate=d;
   renderSummary();
 }
 function setSummaryView(v){ summaryView=v; renderSummary(); }
@@ -3020,7 +3030,7 @@ function breakWindowAt(dayDate, t){
 let _mdsCache = { sig:null, map:{} };
 function machineDayStates(machineId, dayDate){
   const dk = dateKey(dayDate);
-  if(dk >= dateKey(new Date())) return machineDayStatesRaw(machineId, dayDate);   // 今日・未来は毎回計算
+  if(dk >= dateKey(nowDate())) return machineDayStatesRaw(machineId, dayDate);   // 今日・未来は毎回計算
   const sig = planSig();
   if(_mdsCache.sig !== sig) _mdsCache = { sig, map:{} };
   const k = machineId + '|' + dk;
@@ -3029,7 +3039,7 @@ function machineDayStates(machineId, dayDate){
 function machineDayStatesRaw(machineId, dayDate){
   const ws=stdStart(dayDate); const wsT=ws.getTime();
   const weFull=stdEnd(dayDate); const weFullT=weFull.getTime();
-  const now=Date.now();
+  const now=nowMs();
   const total=Math.max(1, Math.round((weFullT-wsT)/60000));
   const recs=store.records.filter(r=>r.machineId===machineId);
   const states=new Array(total);
@@ -3081,7 +3091,7 @@ function summaryFor(machineId, dayDate){
   // 停止理由の内訳・生産個数
   const ws=stdStart(dayDate); const wsT=ws.getTime();
   const weFull=stdEnd(dayDate);
-  const now=Date.now(); const weEff=Math.min(weFull.getTime(), now);
+  const now=nowMs(); const weEff=Math.min(weFull.getTime(), now);
   const dayKey=dateKey(new Date(dayDate));
   let loggedStopMin=0, qty=0, cumQty=0, finishedCount=0; const reasons={};
   store.records.forEach(r=>{
@@ -3178,7 +3188,7 @@ function ensureRangeForSummary(fromDate, toDate){
 }
 function renderSummaryMonth(){
   const y = summaryDate.getFullYear(), mo = summaryDate.getMonth();
-  const today = new Date(); today.setHours(0,0,0,0);
+  const today = nowDate(); today.setHours(0,0,0,0);
   const isThisMonth = (y===today.getFullYear() && mo===today.getMonth());
   $('#sumDateLabel').textContent = `${y}年${mo+1}月` + (isThisMonth ? '（今月）' : '');
 
@@ -3253,7 +3263,7 @@ function renderSummary(){
 
   const d = summaryDate;
   ensureRangeForSummary(d, d);   // 古い日付なら記録を取りに行く（読み込めたら再描画）
-  const today = new Date(); today.setHours(0,0,0,0);
+  const today = nowDate(); today.setHours(0,0,0,0);
   const isToday = d.getTime() === today.getTime();
   $('#sumDateLabel').textContent = fmtDate(d) + (isToday ? '（今日）' : '');
 
@@ -3479,22 +3489,22 @@ function exportCSV(){
 }
 function csvCell(v){ v = String(v==null?'':v); return /[",\r\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
 function fmtFull(iso){ const d=new Date(iso); return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
-function stamp(){ const d=new Date(); return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; }
+function stamp(){ const d=nowDate(); return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; }
 
 /* バックアップの目安（最後に書き出した日を覚えておく） */
 const BACKUP_KEY = 'genbaLastBackup';
-function markBackup(){ try{ localStorage.setItem(BACKUP_KEY, new Date().toISOString()); }catch(e){} renderBackupNote(); }
+function markBackup(){ try{ localStorage.setItem(BACKUP_KEY, nowDate().toISOString()); }catch(e){} renderBackupNote(); }
 function renderBackupNote(){
   const el = $('#backupNote'); if(!el) return;
   let last = null;
   try{ last = localStorage.getItem(BACKUP_KEY); }catch(e){}
   if(!last){ el.innerHTML = '⚠️ まだバックアップを書き出していません。月に1回ほど「⬇ バックアップ」で保存しておくと安心です。'; el.style.color = 'var(--pause-d)'; return; }
-  const days = Math.floor((Date.now() - new Date(last).getTime())/86400000);
+  const days = Math.floor((nowMs() - new Date(last).getTime())/86400000);
   el.innerHTML = `最後のバックアップ：<b>${fmtDate(new Date(last))}</b>（${days}日前）` + (days >= 30 ? ' ⚠️ そろそろ書き出してください' : '');
   el.style.color = days >= 30 ? 'var(--pause-d)' : 'var(--ink3)';
 }
 function exportJSON(){
-  const data = JSON.stringify({ exportedAt:new Date().toISOString(), app:'genba-nippo', version:1, data:store }, null, 2);
+  const data = JSON.stringify({ exportedAt:nowDate().toISOString(), app:'genba-nippo', version:1, data:store }, null, 2);
   downloadBlob(data, `日報バックアップ_${stamp()}.json`, 'application/json');
   markBackup();
   toast('バックアップを書き出しました','success');
@@ -3550,7 +3560,7 @@ function addMachine(){
   if(!id){ toast('機番を入力してください','error'); return; }
   if(store.machines.some(m=>m.id===id)){ toast('同じ機番が登録済みです','error'); return; }
   // 登録日を残す。これより前の日は、この機械を平均や合計に含めない
-  store.machines.push({id, name, since: dateKey(new Date())});
+  store.machines.push({id, name, since: dateKey(nowDate())});
   save();
   $('#newMachId').value=''; $('#newMachName').value='';
   renderMachineSettings(); renderMachineGrid();
@@ -3635,7 +3645,7 @@ function addShutdown(){
   if(!from||!to){ toast('開始日と終了日を入力してください','error'); return; }
   const f=(from<=to)?from:to, t=(from<=to)?to:from;
   store.shutdowns=store.shutdowns||[];
-  store.shutdowns.push({ id:'s'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), from:f, to:t, label, machineId });
+  store.shutdowns.push({ id:'s'+nowMs().toString(36)+Math.random().toString(36).slice(2,5), from:f, to:t, label, machineId });
   save();
   $('#newSdFrom').value=''; $('#newSdTo').value=''; $('#newSdLabel').value='';
   renderShutdownSettings(); processAutoDaily(); refreshActiveViews();
@@ -3699,7 +3709,7 @@ function setRecordQty(id, val){
   const dk = (r.pendingDates||[]).length ? r.pendingDates[0] : dateKey(new Date(r.startTime));
   r.dailyCounts = r.dailyCounts || [];
   const i = r.dailyCounts.findIndex(d=>d.date===dk);
-  if(i>=0) r.dailyCounts[i].qty = q; else r.dailyCounts.push({ date:dk, qty:q, at:new Date().toISOString() });
+  if(i>=0) r.dailyCounts[i].qty = q; else r.dailyCounts.push({ date:dk, qty:q, at:nowDate().toISOString() });
   r.pendingDates = (r.pendingDates||[]).filter(x=>x!==dk);
   r.qty = recordTotalQty(r);
   save(); renderRecords(); renderSummary();
@@ -3709,7 +3719,7 @@ function addCoil(){
   const name = $('#newCoilName').value.trim();
   const n = parseInt($('#newCoilStock').value);
   if(!name){ toast('コイル名称を入力してください','error'); return; }
-  store.coils.push({ id: 'c'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), name, stock: isNaN(n)?0:n });
+  store.coils.push({ id: 'c'+nowMs().toString(36)+Math.random().toString(36).slice(2,5), name, stock: isNaN(n)?0:n });
   save();
   $('#newCoilName').value=''; $('#newCoilStock').value='';
   renderCoilSettings(); renderCoilSelect();
@@ -3761,7 +3771,7 @@ if(PLAN_DEMO && isPC){
 }
 // デモ：見本の注文を入れる（実際に作ったことのある品番で、今日からの納期にする）
 function planDemoSample(){
-  const today = new Date(); today.setHours(0,0,0,0);
+  const today = nowDate(); today.setHours(0,0,0,0);
   const plus = n => { const d = new Date(today); d.setDate(d.getDate()+n); return dateKey(d); };
   const seen = new Map();
   store.records.forEach(r=>{ const p=(r.partNo||'').trim(); if(p) seen.set(p, (seen.get(p)||0)+1); });
@@ -3769,13 +3779,13 @@ function planDemoSample(){
   const plan = [[10000,45],[4000,10],[3500,18],[2000,25],[1500,30]];
   const made = plan.map(([qty, dueIn], i)=>{
     const p = parts[i] || ('DEMO-' + String(i+1).padStart(3,'0'));
-    return { id:'o'+Date.now().toString(36)+i+Math.random().toString(36).slice(2,5), partNo:p, qty, due:plus(dueIn),
+    return { id:'o'+nowMs().toString(36)+i+Math.random().toString(36).slice(2,5), partNo:p, qty, due:plus(dueIn),
       coilId:lastCoilOf(p), spm: parts[i] ? null : 55, spp: parts[i] ? null : 20,
-      machineId:null, start:null, startFrac:0, seq:0, done:false, createdAt:new Date().toISOString() };
+      machineId:null, start:null, startFrac:0, seq:0, done:false, createdAt:nowDate().toISOString() };
   });
   store.orders.push(...made);
   // 1件だけ予定に入れておく（バーの見え方の見本）
-  if(planMachine){ planWorkMemo = {}; const f = planSlot(made[0], planMachine); Object.assign(made[0], { machineId:planMachine, start:numKey(f.d), startFrac:f.f, seq:Date.now() }); }
+  if(planMachine){ planWorkMemo = {}; const f = planSlot(made[0], planMachine); Object.assign(made[0], { machineId:planMachine, start:numKey(f.d), startFrac:f.f, seq:nowMs() }); }
   save(); renderPlan();
   toast('見本の注文を5件入れました（このパソコンだけ）', 'success');
 }
@@ -3788,17 +3798,17 @@ async function planImportCurrent(){
     `デモの注文（${store.orders.length}件）を消して、今動いている作業（${list}）を「作業中」として予定表に出します。取り込んだ後、バーを押して残りの数量と納期を入れてください。日報の記録は変わりません。`, '取り込む');
   if(!ok) return;
   store.orders = [];
-  const now = Date.now(), today = new Date(); today.setHours(0,0,0,0);
+  const now = nowMs(), today = nowDate(); today.setHours(0,0,0,0);
   acts.forEach((r, i)=>{
     // 前の日から続いている作業は、今日の始業から残りを作る扱いにする
     let st = new Date(r.startTime);
-    if(st.getTime() < today.getTime()) st = stdStart(new Date());
+    if(st.getTime() < today.getTime()) st = stdStart(nowDate());
     const ws = stdStart(st).getTime(), we = stdEnd(st).getTime();
     const f = Math.max(0, Math.min(0.999, (st.getTime() - ws) / (we - ws)));
     const partNo = (r.partNo||'').trim() || '（品番なし）';
-    const o = { id:'o'+now.toString(36)+i+Math.random().toString(36).slice(2,5), partNo, qty:1, due:dateKey(new Date()),
+    const o = { id:'o'+now.toString(36)+i+Math.random().toString(36).slice(2,5), partNo, qty:1, due:dateKey(nowDate()),
       coilId: r.coilId || lastCoilOf(partNo) || null, spm: r.spm || null, spp: r.spp || null,
-      machineId:r.machineId, start:dateKey(st), startFrac:f, seq:now+i, done:false, createdAt:new Date().toISOString(),
+      machineId:r.machineId, start:dateKey(st), startFrac:f, seq:now+i, done:false, createdAt:nowDate().toISOString(),
       startedAt:r.startTime, recId:r.id, needsInput:true };
     // 数量・納期を入れるまでは、仮に「1日分」で表示する
     const c = orderCalc(Object.assign({}, o, { qty:1000 }), r.machineId);
@@ -3817,7 +3827,7 @@ async function planDemoClear(){
   store.orders = [];
   save(); renderPlan(); toast('デモの注文を消しました');
 }
-let planMonth = (()=>{ const d=new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
+let planMonth = (()=>{ const d=nowDate(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
 let planMachine = null;           // プールを見ている機械
 let planDrag = null;              // ドラッグ中 { id, from:'pool'|'bar', key, tip }
 let planDirty = false;            // ドラッグ中に来た再描画を後回しにした印
@@ -3835,7 +3845,7 @@ function numKey(n){ return dateKey(numDate(n)); }
 function numMD(n){ const d=numDate(n); return `${d.getMonth()+1}/${d.getDate()}`; }
 function numMDW(n){ const d=numDate(n); return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`; }
 // 1日に動ける時間（定時−休憩）
-function fullDayMin(){ const br = BREAKS.reduce((s,b)=> s + (b.eh*60+b.em)-(b.sh*60+b.sm), 0); return Math.max(60, stdMin(new Date()) - br); }
+function fullDayMin(){ const br = BREAKS.reduce((s,b)=> s + (b.eh*60+b.em)-(b.sh*60+b.sm), 0); return Math.max(60, stdMin(nowDate()) - br); }
 function planFmtDays(x){ const v = Math.ceil(x*2 - 1e-9)/2; return v%1 ? v.toFixed(1) : String(v); }
 function planFmtHours(min){ const h = min/60; return h < 10 ? (Math.round(h*10)/10) + '時間' : Math.round(h) + '時間'; }
 // その機械が動く日か（土日祝・休止期間を除く）
@@ -3879,11 +3889,11 @@ function posLatest(dueKey, need, machineId){
 /* 機械×日ごとの「動いていた分・個数・作った品番」（昨日まで）。記録が変わった時だけ作り直す */
 let _planStats = { sig:null, data:{} };
 // データが変わったか・日付が変わったかの目印（計算結果の使い回しに使う）
-function planSig(){ return dataVer + '|' + dateKey(new Date()); }
+function planSig(){ return dataVer + '|' + dateKey(nowDate()); }
 function planStats(){
   const sig = planSig();
   if(_planStats.sig === sig) return _planStats.data;
-  const todayK = dateKey(new Date()), nowT = Date.now();
+  const todayK = dateKey(nowDate()), nowT = nowMs();
   const byM = {}, recsByM = {};
   store.records.forEach(r=>{
     const re = endRefT(r);
@@ -3987,7 +3997,7 @@ function planLayout(machineId, override){
 }
 // 今から入れられる最初の位置（終業後なら翌日から）
 function planTodayPos(machineId){
-  const now = new Date(), t = now.getTime();
+  const now = nowDate(), t = now.getTime();
   const ws = stdStart(now).getTime(), we = stdEnd(now).getTime();
   let d = dayNum(dateKey(now)), f = 0;
   if(t >= we) d++;
@@ -4081,7 +4091,7 @@ function renderPlan(){
   if(!planMachine || !ms.some(m=>m.id===planMachine)){
     planMachine = (selectedMachineId && ms.some(m=>m.id===selectedMachineId)) ? selectedMachineId : (ms[0] ? ms[0].id : null);
   }
-  const now = new Date(), todayN = dayNum(dateKey(now));
+  const now = nowDate(), todayN = dayNum(dateKey(now));
   // 月で区切らず横に続けて表示（先月〜数か月先）。右端に近づいたら先の月を自動で足す
   const base = new Date(now.getFullYear(), now.getMonth(), 1);
   const prevFirst = planFirst;
@@ -4183,7 +4193,7 @@ function planCardHtml(o, fit, machineId){
 function setPlanMachine(id){ planMachine = id; renderPlan(); }
 // ◀▶：前・次の月の1日へスクロール（表示の範囲が足りなければ広げる）
 function planMonthMove(k){
-  const t = new Date(planMonth.getFullYear(), planMonth.getMonth() + k, 1), now = new Date();
+  const t = new Date(planMonth.getFullYear(), planMonth.getMonth() + k, 1), now = nowDate();
   const diff = (t.getFullYear() - now.getFullYear()) * 12 + (t.getMonth() - now.getMonth());
   if(-diff > planBehind) planBehind = Math.min(24, -diff);
   if(diff + 1 > planAhead) planAhead = Math.min(36, diff + 2);
@@ -4195,7 +4205,7 @@ function planThisMonth(){ planScrollToday = true; renderPlan(); }
 function planUpdateLabel(){
   const wrap = $('#planGantt').parentNode;
   const i = Math.max(0, Math.min(planN - 1, Math.round(wrap.scrollLeft / PLAN_CW)));
-  const d = numDate(planFirst + i), now = new Date();
+  const d = numDate(planFirst + i), now = nowDate();
   planMonth = new Date(d.getFullYear(), d.getMonth(), 1);
   $('#planLabel').textContent = `${d.getFullYear()}年${d.getMonth()+1}月` + (d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() ? '（今月）' : '');
 }
@@ -4237,7 +4247,7 @@ function planPut(id){
   const o = store.orders.find(x=>x.id===id); if(!o || !planMachine) return;
   planWorkMemo = {};
   const free = planSlot(o, planMachine);
-  o.machineId = planMachine; o.start = numKey(free.d); o.startFrac = free.f; o.seq = Date.now();
+  o.machineId = planMachine; o.start = numKey(free.d); o.startFrac = free.f; o.seq = nowMs();
   save(); renderPlan(); planToastPlaced(o);
 }
 function planToPool(id){
@@ -4260,7 +4270,7 @@ function planAutoDone(){
       if(!cur) return;                                              // 終業後・休みの日は続きとみなす
       if((cur.partNo||'').trim() === o.partNo){ o.recId = cur.id; n++; return; }
     }
-    o.done = true; o.doneAt = r.endTime || new Date().toISOString(); o.doneQty = recordTotalQty(r); n++;
+    o.done = true; o.doneAt = r.endTime || nowDate().toISOString(); o.doneQty = recordTotalQty(r); n++;
   });
   return n;
 }
@@ -4285,14 +4295,14 @@ function planPullForward(o, machineId){
     }
   }
   const earlier = i >= 0 && posCmp(lay[i].s, now) > 0.05;
-  o.machineId = machineId; o.start = numKey(now.d); o.startFrac = now.f; o.seq = Date.now();
+  o.machineId = machineId; o.start = numKey(now.d); o.startFrac = now.f; o.seq = nowMs();
   chain.forEach((y, n)=>{ y.start = o.start; y.startFrac = now.f + (n+1)*1e-6; });   // 並び順はそのまま
   return earlier;
 }
 // 作業を開始したら、次の予定（または指定の注文）と記録をつなぐ
 function planLinkStart(rec, orderId){
   if(!store.orders || !store.orders.length) return null;
-  const m = rec.machineId, nowIso = new Date().toISOString();
+  const m = rec.machineId, nowIso = nowDate().toISOString();
   // この機械で「開始済みのまま」の注文は、機械が空いていた＝作業は終わっているので完了にする
   store.orders.forEach(o=>{
     if(o.done || !o.startedAt || o.machineId!==m || o.recId===rec.id) return;
@@ -4361,7 +4371,7 @@ function planPreview(id, machineId, n){
   planWorkMemo = {};
   const o = store.orders.find(x=>x.id===id); if(!o) return '';
   const before = new Set(planLayout(machineId).filter(x=> x.late && x.o.id!==id).map(x=>x.o.id));
-  const tmp = Object.assign({}, o, { machineId, start:numKey(n), startFrac:0, seq:Date.now() });
+  const tmp = Object.assign({}, o, { machineId, start:numKey(n), startFrac:0, seq:nowMs() });
   const lay = planLayout(machineId, tmp);
   const me = lay.find(x=>x.o.id===id); if(!me) return '';
   let h = `<b>${esc(machineId)}</b>　${numMDW(me.s.d)} 開始 → ${numMDW(me.last)} 完了`;
@@ -4409,7 +4419,7 @@ function planDropTrack(e, machineId){
   const o = store.orders.find(x=>x.id===planDrag.id);
   planDragEnd();
   if(!o) return;
-  o.machineId = machineId; o.start = numKey(n); o.startFrac = 0; o.seq = Date.now();
+  o.machineId = machineId; o.start = numKey(n); o.startFrac = 0; o.seq = nowMs();
   save(); renderPlan(); planToastPlaced(o);
 }
 function planPoolOver(e){
@@ -4533,7 +4543,7 @@ function osRefresh(){
       const st = $('#osStart').value;
       if(sched && st){
         const same = o0 && o0.machineId===mId && o0.start===st;
-        const t2 = Object.assign({}, tmp, { machineId:mId, start:st, startFrac: same ? (o0.startFrac||0) : 0, seq: same ? (o0.seq||0) : Date.now() });
+        const t2 = Object.assign({}, tmp, { machineId:mId, start:st, startFrac: same ? (o0.startFrac||0) : 0, seq: same ? (o0.seq||0) : nowMs() });
         const me = planLayout(mId, t2).find(x=>x.o.id===t2.id);
         if(me) h += `<br>${numMDW(me.s.d)} 開始 → <b>${numMDW(me.last)}</b> 完了　` + (me.late ? '<span class="bad">納期に遅れます</span>' : '<span class="ok">納期に間に合います</span>');
       } else {
@@ -4552,7 +4562,7 @@ function saveOrder(){
   const isEdit = !!osId;
   let o = isEdit ? store.orders.find(x=>x.id===osId) : null;
   if(!o){
-    o = { id:'o'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), machineId:null, start:null, startFrac:0, seq:0, done:false, createdAt:new Date().toISOString() };
+    o = { id:'o'+nowMs().toString(36)+Math.random().toString(36).slice(2,6), machineId:null, start:null, startFrac:0, seq:0, done:false, createdAt:nowDate().toISOString() };
     store.orders.push(o);
   }
   o.partNo = part; o.qty = qty; o.due = due; o.coilId = $('#osCoil').value || null;
@@ -4565,7 +4575,7 @@ function saveOrder(){
   let moved = false;
   if(!$('#osSched').hidden){
     const m = $('#osMach').value, st = $('#osStart').value;
-    if(m && st && (m!==o.machineId || st!==o.start)){ o.machineId = m; o.start = st; o.startFrac = 0; o.seq = Date.now(); moved = true; }
+    if(m && st && (m!==o.machineId || st!==o.start)){ o.machineId = m; o.start = st; o.startFrac = 0; o.seq = nowMs(); moved = true; }
   }
   save(); closeOrderSheet(); renderPlan();
   if(moved) planToastPlaced(o);
@@ -4577,7 +4587,7 @@ async function osDone(){
   closeOrderSheet();
   const ok = await confirmDialog('完了にする', `${o.partNo}（${o.qty.toLocaleString()}個）を完了にして、予定から外します。`, '完了にする');
   if(!ok) return;
-  o.done = true; o.doneAt = new Date().toISOString();
+  o.done = true; o.doneAt = nowDate().toISOString();
   save(); renderPlan(); toast('完了にしました','success');
 }
 async function osDelete(){
@@ -4591,7 +4601,7 @@ async function osDelete(){
 }
 
 /* ===== CLOCK ===== */
-function clockTick(){ $('#clock').textContent = fmtClock(new Date()); }
+function clockTick(){ $('#clock').textContent = fmtClock(nowDate()); }
 
 /* ===== UNIVERSAL MODAL DISMISS (tap background / Esc) ===== */
 function closeAnyOverlay(ov){
@@ -4617,7 +4627,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.42';
+const APP_VERSION = '2026-06-28.43';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -4625,29 +4635,30 @@ function showVerStatus(latest, err){
   if(latest && latest !== APP_VERSION){ el.textContent = '新しい版があります：' + latest; el.className='ver-latest old'; }
   else { el.textContent = '最新版です'; el.className='ver-latest ok'; }
 }
-/* 端末の時計ずれを見つける（時刻がずれていると日報の時間が全部ずれるため） */
-let clockOffSec = 0;
+/* 端末の時計ずれを測って、記録に使う時刻を直す（ずれたままだと日報の時間が全部ずれるため） */
 function showClockNote(){
   const el = $('#clockNote'); if(!el) return;
   const m = Math.round(Math.abs(clockOffSec)/60);
   el.hidden = Math.abs(clockOffSec) < 180;
-  if(!el.hidden) el.textContent = `⚠️ この端末の時計が約${m}分${clockOffSec>0?'進んで':'遅れて'}います。端末の時刻を直してください`;
+  if(!el.hidden) el.textContent = `⚠️ この端末の時計が約${m}分${clockOffSec>0?'進んで':'遅れて'}います（記録の時刻はアプリ側で直しています）。端末の時刻設定も「自動」にしてください`;
 }
 function checkClock(serverDateHeader){
   if(!serverDateHeader) return;
   const t = new Date(serverDateHeader).getTime();
   if(!t) return;
-  const diff = Math.round((Date.now() - t)/1000);
+  const diff = Math.round((/*RAW*/Date.now() - t)/1000);
+  if(Math.abs(diff) > 6*3600) return;                 // ありえない差は使わない
   const wasOff = Math.abs(clockOffSec) >= 180;
   clockOffSec = diff;
+  try{ localStorage.setItem(CLOCK_KEY, String(diff)); }catch(e){}   // 圏外でも前回のずれを使えるように
   showClockNote();
   if(!wasOff && Math.abs(diff) >= 180){
-    toast(`この端末の時計が約${Math.round(Math.abs(diff)/60)}分${diff>0?'進んで':'遅れて'}います。時刻を直してください`, 'error');
+    toast(`この端末の時計が約${Math.round(Math.abs(diff)/60)}分${diff>0?'進んで':'遅れて'}います。記録の時刻はアプリ側で直しました`, 'error');
   }
 }
 async function checkForUpdate(){
   try{
-    const r = await fetch('version.txt?cb=' + Date.now(), { cache:'no-store' });
+    const r = await fetch('version.txt?cb=' + nowMs(), { cache:'no-store' });
     checkClock(r.headers.get('date'));   // サーバーの時刻と比べる
     if(!r.ok){ showVerStatus(null, true); return; }
     const v = (await r.text()).trim();
@@ -4661,7 +4672,7 @@ async function checkForUpdate(){
 }
 function applyUpdate(){
   // 版番号＋時刻の両方を付けてURLを必ず新しくする（古いHTMLがキャッシュから出るのを防ぐ）
-  const v = (updateLatest || 'x') + '.' + Date.now();
+  const v = (updateLatest || 'x') + '.' + nowMs();
   location.replace(location.pathname + '?v=' + encodeURIComponent(v));
 }
 // お知らせバーが出ない端末でも、設定から確実に最新版を取り直せるようにする
