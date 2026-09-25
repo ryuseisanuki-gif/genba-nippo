@@ -152,6 +152,8 @@
     display:inline-flex;align-items:center;gap:4px;color:var(--run-d);
   }
   .machine-btn .m-tag.pause{color:var(--pause-d);}
+  .machine-btn .m-tag.shut{color:var(--ink3);font-weight:800;}
+  .machine-btn.shut{background:var(--steel);border-color:var(--line2);}
   .machine-btn .m-tag .d{width:6px;height:6px;border-radius:50%;background:var(--run);animation:pulse 1.4s infinite;}
   .machine-btn .m-tag.pause .d{background:var(--pause);}
   .machine-empty{
@@ -1634,11 +1636,13 @@ function renderMachineGrid(){
     const paused = stoppedFor(m.id);
     const over = overnightFor(m.id);
     const sel = m.id===selectedMachineId;
+    const sd = isShutdown(nowDate(), m.id);   // 休止期間（生産調整・メンテ等）
     let tag = '';
     if(run) tag = `<span class="m-tag"><span class="d"></span>稼働中</span>`;
     else if(paused) tag = `<span class="m-tag pause"><span class="d"></span>停止中</span>`;
     else if(over) tag = `<span class="m-tag over"><span class="d"></span>持ち越し</span>`;
-    return `<button class="machine-btn ${sel?'sel':''} ${run?'busy':''} ${paused?'paused':''} ${over?'over':''}" onclick="selectMachine('${esc(m.id)}')">
+    if(sd) tag += `<span class="m-tag shut">🛌 休止${sd.label?'（'+esc(sd.label)+'）':''}</span>`;
+    return `<button class="machine-btn ${sel?'sel':''} ${run?'busy':''} ${paused?'paused':''} ${over?'over':''} ${(sd&&!run&&!paused&&!over)?'shut':''}" onclick="selectMachine('${esc(m.id)}')">
       <span class="m-id">${esc(m.id)}</span>
       <span class="m-name">${esc(m.name||'')}</span>
       ${tag}
@@ -1913,10 +1917,12 @@ function renderStatus(){
     : `<div class="idle-msg">${msg}</div>
         <button class="btn-big btn-start" id="startBtn" ${ready?'':'disabled'} onclick="startJob()"><span class="ic">▶</span>開始</button>
         ${!ready?'<div class="lock-hint">機械の選択とバーコード読み取りで開始できます</div>':''}`;
+  const sdNow = selectedMachineId ? isShutdown(nowDate(), selectedMachineId) : null;
   panel.innerHTML = `
     <div class="status idle">
-      <div class="st-strip">待機中</div>
+      <div class="st-strip">${sdNow ? '🛌 休止期間' : '待機中'}</div>
       <div class="st-body">
+        ${sdNow ? `<div class="workday-note" style="margin-bottom:12px"><span>🛌 この機械は<b>休止期間</b>です${sdNow.label?'（'+esc(sdNow.label)+'）':''}　${esc(sdNow.from.replace(/-/g,'/'))}〜${esc(sdNow.to.replace(/-/g,'/'))}<br>自動記録は作らず、日別集計でも休業として扱います</span></div>` : ''}
         ${nx ? planNextCard(nx) : ''}
         ${generic}
       </div>
@@ -1979,6 +1985,13 @@ async function startJob(orderId){
   setTimeout(()=>{ startBusy = false; }, 800);
   if(!selectedMachineId){ toast('機械を選んでください','error'); return; }
   if(!scan.partNo){ toast('バーコードを読み取ってください','error'); return; }
+  // 休止期間の機械はうっかり開始しないように確認する
+  const sd = isShutdown(nowDate(), selectedMachineId);
+  if(sd){
+    const ok = await confirmDialog('休止期間です',
+      `${selectedMachineId} は休止期間${sd.label?'（'+sd.label+'）':''}（${sd.from.replace(/-/g,'/')}〜${sd.to.replace(/-/g,'/')}）です。それでも作業を開始しますか？`, '開始する');
+    if(!ok) return;
+  }
   // 前の作業が残っていたら、終了してから始める（個数はあとで入力できるので止まらない）
   const prev = activeFor(selectedMachineId);
   if(prev){
@@ -2364,6 +2377,23 @@ function processAutoDaily(){
       }
     });
     const todays = store.records.filter(r=> r.machineId===m.id && r.auto===true && dateKey(new Date(r.startTime))===dk);
+    if(shut){
+      // 休止（生産調整など）を後から登録した日：その日の自動記録は動かしたままにしない
+      const drop = [];
+      todays.forEach(r=>{
+        if(r.status!=='running' && r.status!=='stopped') return;
+        if(recordTotalQty(r) > 0 || (r.stops||[]).length){   // 中身がある記録は消さずに終了だけする
+          closeAllOpenStops(r, nowIso());
+          r.endTime = nowIso(); r.lastRunEnd = null; r.status = 'done';
+        } else drop.push(r.id);                              // 空の自動記録は消す
+        changed = true;
+      });
+      if(drop.length){
+        store.records = store.records.filter(r=> !drop.includes(r.id));
+        drop.forEach(id=> delDoc('records', id));
+      }
+      return;
+    }
     if(now >= seventeen.getTime()){
       // 17:00以降：今日の自動記録を終了（個数は後から手入力）
       todays.forEach(r=>{
@@ -4627,7 +4657,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.43';
+const APP_VERSION = '2026-06-28.44';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
