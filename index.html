@@ -994,6 +994,7 @@
       </label>
       <button class="btn-ghost-danger" onclick="clearRecords()">記録をすべて削除</button>
     </div>
+    <div id="backupNote" class="set-note"></div>
     <div class="set-note">
       データはこの端末のブラウザ内に保存されます。<br>
       別の端末へ移すときは「バックアップ」で書き出し →「バックアップ読込」で取り込めます（記録は統合されます）。
@@ -1006,6 +1007,7 @@
       <div class="ver-info">
         <div>この端末：<b id="appVer">—</b></div>
         <div id="verLatest" class="ver-latest">最新版を確認中…</div>
+      <div id="clockNote" class="ver-latest old" hidden></div>
       </div>
       <button class="ver-btn" onclick="forceUpdate()">最新版にする</button>
     </div>
@@ -2490,6 +2492,7 @@ function refreshHeavyViews(){
       renderPartNames();
       renderAutoSettings();
       renderShutdownSettings();   // 他端末で追加/編集した休止期間もリアルタイム反映
+      renderBackupNote();
     }
   }, 250);
 }
@@ -3478,9 +3481,22 @@ function csvCell(v){ v = String(v==null?'':v); return /[",\r\n]/.test(v) ? '"'+v
 function fmtFull(iso){ const d=new Date(iso); return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function stamp(){ const d=new Date(); return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; }
 
+/* バックアップの目安（最後に書き出した日を覚えておく） */
+const BACKUP_KEY = 'genbaLastBackup';
+function markBackup(){ try{ localStorage.setItem(BACKUP_KEY, new Date().toISOString()); }catch(e){} renderBackupNote(); }
+function renderBackupNote(){
+  const el = $('#backupNote'); if(!el) return;
+  let last = null;
+  try{ last = localStorage.getItem(BACKUP_KEY); }catch(e){}
+  if(!last){ el.innerHTML = '⚠️ まだバックアップを書き出していません。月に1回ほど「⬇ バックアップ」で保存しておくと安心です。'; el.style.color = 'var(--pause-d)'; return; }
+  const days = Math.floor((Date.now() - new Date(last).getTime())/86400000);
+  el.innerHTML = `最後のバックアップ：<b>${fmtDate(new Date(last))}</b>（${days}日前）` + (days >= 30 ? ' ⚠️ そろそろ書き出してください' : '');
+  el.style.color = days >= 30 ? 'var(--pause-d)' : 'var(--ink3)';
+}
 function exportJSON(){
   const data = JSON.stringify({ exportedAt:new Date().toISOString(), app:'genba-nippo', version:1, data:store }, null, 2);
   downloadBlob(data, `日報バックアップ_${stamp()}.json`, 'application/json');
+  markBackup();
   toast('バックアップを書き出しました','success');
 }
 function downloadBlob(content, filename, type){
@@ -4601,7 +4617,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.41';
+const APP_VERSION = '2026-06-28.42';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -4609,9 +4625,30 @@ function showVerStatus(latest, err){
   if(latest && latest !== APP_VERSION){ el.textContent = '新しい版があります：' + latest; el.className='ver-latest old'; }
   else { el.textContent = '最新版です'; el.className='ver-latest ok'; }
 }
+/* 端末の時計ずれを見つける（時刻がずれていると日報の時間が全部ずれるため） */
+let clockOffSec = 0;
+function showClockNote(){
+  const el = $('#clockNote'); if(!el) return;
+  const m = Math.round(Math.abs(clockOffSec)/60);
+  el.hidden = Math.abs(clockOffSec) < 180;
+  if(!el.hidden) el.textContent = `⚠️ この端末の時計が約${m}分${clockOffSec>0?'進んで':'遅れて'}います。端末の時刻を直してください`;
+}
+function checkClock(serverDateHeader){
+  if(!serverDateHeader) return;
+  const t = new Date(serverDateHeader).getTime();
+  if(!t) return;
+  const diff = Math.round((Date.now() - t)/1000);
+  const wasOff = Math.abs(clockOffSec) >= 180;
+  clockOffSec = diff;
+  showClockNote();
+  if(!wasOff && Math.abs(diff) >= 180){
+    toast(`この端末の時計が約${Math.round(Math.abs(diff)/60)}分${diff>0?'進んで':'遅れて'}います。時刻を直してください`, 'error');
+  }
+}
 async function checkForUpdate(){
   try{
     const r = await fetch('version.txt?cb=' + Date.now(), { cache:'no-store' });
+    checkClock(r.headers.get('date'));   // サーバーの時刻と比べる
     if(!r.ok){ showVerStatus(null, true); return; }
     const v = (await r.text()).trim();
     if(v && v !== APP_VERSION){
@@ -4652,6 +4689,7 @@ function init(){
   renderPartNames();
   renderAutoSettings();
   renderShutdownSettings();
+  renderBackupNote();
   renderCoilSelect();
   renderRpm();
   clockTick();
