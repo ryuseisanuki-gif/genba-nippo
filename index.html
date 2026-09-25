@@ -1380,6 +1380,7 @@ function initSync(){
   }catch(e){ console.warn('firebase init failed', e); setSyncStatus('offline'); enableAutoCreate(); }
 }
 function attachListeners(){
+  flushPendingDels();   // 圏外の間に消したものを、つながった今のうちに消す
   db.collection('machines').onSnapshot(s=>applySnap('machines', s), e=>{ console.warn('machines listen', e); setSyncStatus('offline'); });
   // 記録は「直近 RECENT_DAYS 日」だけ常時監視する（何年分あっても起動が重くならない）。
   // それより古い記録はサーバーに残り、集計や記録タブで必要になった時だけ読み込む。
@@ -1462,9 +1463,23 @@ function syncPush(){
   // （古い記録をメモリから外して軽くする仕組みと両立させるため。推測で消すとサーバーの記録まで消える）
 }
 // 実際に削除する時だけ呼ぶ（ユーザー操作・重複掃除）
+// 圏外で消したものは覚えておき、つながった時に消す（そのままだと同期で復活してしまう）
+const PENDING_DEL_KEY = 'genbaPendingDel';
+let pendingDels = (()=>{ try{ return JSON.parse(localStorage.getItem(PENDING_DEL_KEY) || '[]'); }catch(e){ return []; } })();
+function savePendingDels(){ try{ localStorage.setItem(PENDING_DEL_KEY, JSON.stringify(pendingDels)); }catch(e){} }
+function queueDel(kind, id){
+  if(!pendingDels.some(x=> x.k===kind && x.i===id)){ pendingDels.push({ k:kind, i:id }); savePendingDels(); }
+}
+function flushPendingDels(){
+  if(!fbReady || !db || !pendingDels.length) return;
+  const list = pendingDels.slice();
+  pendingDels = []; savePendingDels();
+  list.forEach(x=> db.collection(x.k).doc(x.i).delete().catch(e=>{ console.warn('del retry', x, e); queueDel(x.k, x.i); }));
+}
 function delDoc(kind, id){
   delete lastSynced[kind+'/'+id];
-  if(fbReady && db) db.collection(kind).doc(id).delete().catch(e=>console.warn('del', kind, id, e));
+  if(fbReady && db) db.collection(kind).doc(id).delete().catch(e=>{ console.warn('del', kind, id, e); queueDel(kind, id); });
+  else queueDel(kind, id);
 }
 
 /* ===== STATE ===== */
@@ -2168,7 +2183,7 @@ function processDayBoundaries(){
     const todayKey = dateKey(nowDate());
     const nine = stdStart(nowDate()).getTime();
     const base = r.overnightDate || (r.pendingDates||[])[0] || dateKey(new Date(r.lastRunEnd||nowMs()));
-    if(base && todayKey > base && now >= nine && !offDay(nowDate())){
+    if(base && todayKey > base && now >= nine && !offDay(nowDate()) && !isShutdown(nowDate(), r.machineId)){   // 休止期間の機械は再開しない
       r.status = 'running';
       r.sessionStart = stdStart(nowDate()).toISOString();
       r.lastRunEnd = null;
@@ -2182,6 +2197,25 @@ function processDayBoundaries(){
 function isShutdown(dayDate, machineId){
   const dk = dateKey(dayDate);
   return (store.shutdowns||[]).find(sd => sd && sd.from && sd.to && sd.from<=dk && dk<=sd.to && (!sd.machineId || sd.machineId===machineId)) || null;
+}
+// その日その機械に実際の作業があったか（手動で始めた記録・個数入力がある）
+function machineDayHasWork(dayDate, machineId){
+  const dk = dateKey(dayDate);
+  return store.records.some(r=> r.machineId===machineId && (
+    (r.auto!==true && dateKey(new Date(r.startTime))===dk) ||
+    (r.dailyCounts||[]).some(c=> c.date===dk && (c.qty||0)>0)
+  ));
+}
+// その日その機械に記録が1件でもあるか（無い日は稼働率0%ではなく「－」にする）
+function machineDayHasRecord(dayDate, machineId){
+  const dk = dateKey(dayDate);
+  return store.records.some(r=> r.machineId===machineId &&
+    dateKey(new Date(r.startTime)) <= dk && dateKey(new Date(endRefT(r))) >= dk);
+}
+// 集計用の休止判定：休止期間でも実際に作業していたら、その日は休業にしない（生産個数が消えないように）
+function shutdownForAgg(dayDate, machineId){
+  const sd = isShutdown(dayDate, machineId);
+  return (sd && !machineDayHasWork(dayDate, machineId)) ? sd : null;
 }
 
 /* ===== 土日祝は既定で休業 ===== */
@@ -3116,7 +3150,8 @@ function summaryFor(machineId, dayDate){
   const stopMin = Math.max(0, elapsed - runMin - breakMin);   // 止まっている（休憩を除く）
   const workWindow = Math.max(0, elapsed - breakMin);          // 実働可能時間（定時−休憩）
   const remain = remainCount;
-  const rate = workWindow>0 ? Math.round(runMin/workWindow*100) : null;
+  // 記録が1件も無い日は 0% ではなく「－」にする（データが無いことと、動かなかったことを分ける）
+  const rate = (workWindow>0 && machineDayHasRecord(dayDate, machineId)) ? Math.round(runMin/workWindow*100) : null;
 
   // 停止理由の内訳・生産個数
   const ws=stdStart(dayDate); const wsT=ws.getTime();
@@ -3195,7 +3230,7 @@ function machineExistsOn(machineId, dayDate){
 }
 /* その日に集計対象となる機械（休業中・登録前を除く） */
 function machinesOn(d){
-  return store.machines.filter(m=> machineExistsOn(m.id, d) && !isShutdown(d, m.id));
+  return store.machines.filter(m=> machineExistsOn(m.id, d) && !shutdownForAgg(d, m.id));
 }
 function dayAgg(d, machineId){
   let existing = store.machines.filter(m=> machineExistsOn(m.id, d));   // その日に存在した機械
@@ -3203,11 +3238,14 @@ function dayAgg(d, machineId){
     existing = existing.filter(m=> m.id===machineId);                   // 機械ごとに見るとき
     if(!existing.length) return { qty:0, run:0, work:0, recs:0, allShut:false, rate:null, none:true };
   }
-  const active = existing.filter(m=> !isShutdown(d, m.id));
+  const active = existing.filter(m=> !shutdownForAgg(d, m.id));
   const allShut = existing.length>0 && active.length===0;
-  let qty=0, run=0, work=0, recs=0;
-  active.forEach(m=>{ const s=summaryFor(m.id, d); qty+=s.qty; run+=s.runMin; work+=s.workWindow; recs+=s.finishedCount; });
-  return { qty, run, work, recs, allShut, rate: work>0 ? Math.round(run/work*100) : null };
+  let qty=0, run=0, work=0, recs=0, hasRec=false;
+  active.forEach(m=>{
+    const s=summaryFor(m.id, d); qty+=s.qty; run+=s.runMin; work+=s.workWindow; recs+=s.finishedCount;
+    if(machineDayHasRecord(d, m.id)) hasRec = true;
+  });
+  return { qty, run, work, recs, allShut, noData: !hasRec, rate: (work>0 && hasRec) ? Math.round(run/work*100) : null };
 }
 /* 月カレンダー：日付タップで日別詳細へ */
 // 集計で古い期間を開いたら、その期間の記録をサーバーから読み込む
@@ -3300,9 +3338,9 @@ function renderSummary(){
   // その日に存在した機械だけを対象にする（後から登録した機械は、それ以前の日の平均に含めない）
   const existMachines = store.machines.filter(m=> machineExistsOn(m.id, d) && (!sumMachine || m.id===sumMachine));
   // 休止期間（稼働しない日）は機械ごとに集計対象外
-  const activeMachines = existMachines.filter(m=> !isShutdown(d, m.id));
+  const activeMachines = existMachines.filter(m=> !shutdownForAgg(d, m.id));
   if(existMachines.length>0 && activeMachines.length===0){
-    const sd0 = isShutdown(d, existMachines[0].id);
+    const sd0 = shutdownForAgg(d, existMachines[0].id);
     $('#sumDayMeta').innerHTML = `<div class="dm" style="grid-column:1/-1"><div class="lab">この日は</div><div class="val">🛌 休業${sd0&&sd0.label?'（'+esc(sd0.label)+'）':''}</div></div>`;
     $('#summaryList').innerHTML = `<div class="empty"><div class="e-ic">🛌</div><div class="e-t">${sumMachine?esc(sumMachine)+' 休業':'全機械 休業'}</div><div class="e-t" style="font-size:12px;color:var(--ink3);font-weight:600">この日は稼働率・平均・目標の対象外です</div></div>`;
     return;
@@ -3354,7 +3392,7 @@ function renderSummary(){
     </div>` : '';
 
   list.innerHTML = wdBanner + existMachines.map(m=>{
-    const mShut = isShutdown(d, m.id);
+    const mShut = shutdownForAgg(d, m.id);
     if(mShut){
       return `<div class="sum-card"><div class="sum-head"><span class="sid">${esc(m.id)}</span><span class="sname">${esc(m.name||'')}</span><span class="srate none">🛌 休業</span></div><div class="sum-jobs">休業${mShut.label?'（'+esc(mShut.label)+'）':''} ・ 集計対象外</div></div>`;
     }
@@ -4657,7 +4695,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.44';
+const APP_VERSION = '2026-06-28.45';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -4752,7 +4790,7 @@ function init(){
   });
   window.addEventListener('pageshow', checkForUpdate);       // iOSの復帰（bfcache）対策
   window.addEventListener('focus', checkForUpdate);
-  window.addEventListener('online', checkForUpdate);         // 圏外から戻った時
+  window.addEventListener('online', ()=>{ checkForUpdate(); flushPendingDels(); });   // 圏外から戻った時
 }
 init();
 </script>
