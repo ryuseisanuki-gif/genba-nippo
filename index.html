@@ -965,6 +965,11 @@
     <div class="set-note">入力画面でコイルを選べます。停止理由「コイル交換」で在庫が1減ります。</div>
   </div>
 
+  <div class="card set-card pc-only" id="planModeCard">
+    <h3>🗓️ 予定タブ（デモ／本番）</h3>
+    <div id="planModeBody"></div>
+  </div>
+
   <div class="card set-card">
     <h3>🏷️ 品番の品名</h3>
     <div id="partNameList"></div>
@@ -1229,12 +1234,24 @@ function nowDate(){ return new Date(nowMs()); }
 function nowIso(){ return nowDate().toISOString(); }
 
 /* ===== STORE ===== */
-let store = { machines: [], records: [], coils: [], shutdowns: [], workdays: [], orders: [], parts: [] };
+let store = { machines: [], records: [], coils: [], shutdowns: [], workdays: [], orders: [], parts: [], settings: [] };
 const KEY = 'genbaNippoData_v1';
 // 予定タブはデモ中：注文はこの端末（パソコン）だけに保存し、サーバーにも他の端末にも送らない。
 // 本番で使い始める時は false にする（注文が orders コレクションで全端末に同期される）。
-const PLAN_DEMO = true;
 const PLAN_DEMO_KEY = 'genbaPlanDemo_v1';
+// 予定タブの使い方：デモ（このパソコンの中だけ）／本番（全端末で共有）。設定タブで切り替える
+function isDemo(){
+  const s = (store.settings||[]).find(x=> x.id==='app');
+  return s ? s.planDemo !== false : true;     // 既定はデモ
+}
+function demoChip(){ return isDemo() ? '<span class="demo-chip">🧪 デモ</span>' : ''; }
+function setSetting(key, val){
+  store.settings = store.settings || [];
+  let s = store.settings.find(x=> x.id==='app');
+  if(!s){ s = { id:'app' }; store.settings.push(s); }
+  s[key] = val; s.at = nowIso();
+  save();
+}
 // データが変わるたびに1増やす番号。計算結果を使い回す（キャッシュ）ための目印
 let dataVer = 0;
 
@@ -1245,9 +1262,10 @@ function load(){
   if(!Array.isArray(store.coils)) store.coils = [];
   if(!Array.isArray(store.shutdowns)) store.shutdowns = [];
   if(!Array.isArray(store.workdays)) store.workdays = [];   // 土日祝でも稼働する日
+  if(!Array.isArray(store.settings)) store.settings = [];   // アプリの設定（予定のデモ／本番など）
   if(!Array.isArray(store.parts)) store.parts = [];         // 品番ごとの品名
   if(!Array.isArray(store.orders)) store.orders = [];       // 注文（予定タブ）
-  if(PLAN_DEMO){   // デモ中の注文は別の保存場所から読む
+  if(isDemo()){   // デモ中の注文は別の保存場所から読む
     try{ const s = localStorage.getItem(PLAN_DEMO_KEY); store.orders = s ? JSON.parse(s) : []; }catch(e){ store.orders = []; }
     if(!Array.isArray(store.orders)) store.orders = [];
   }
@@ -1268,11 +1286,11 @@ function load(){
   // 既定機械の自動生成は廃止（削除しても復活しないように）。機械は設定タブで登録する。
 }
 // 日報の保存にはデモの注文を混ぜない（本番に切り替えた時に勝手に送られないように）
-function storeJson(){ return PLAN_DEMO ? JSON.stringify(Object.assign({}, store, { orders: undefined })) : JSON.stringify(store); }
+function storeJson(){ return isDemo() ? JSON.stringify(Object.assign({}, store, { orders: undefined })) : JSON.stringify(store); }
 function save(){
   dataVer++;
   try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
-  if(PLAN_DEMO){ try{ localStorage.setItem(PLAN_DEMO_KEY, JSON.stringify(store.orders||[])); }catch(e){} }
+  if(isDemo()){ try{ localStorage.setItem(PLAN_DEMO_KEY, JSON.stringify(store.orders||[])); }catch(e){} }
   if(initialSyncDone) syncPush();
 }
 
@@ -1294,7 +1312,7 @@ function enableAutoCreate(){
   if(processAutoDaily()) { refreshActiveViews(); }
 }
 // orders（予定）は初回同期の条件に入れない（読めなくても日報は今まで通り動くように）
-const firstSnap = { machines:false, records:false, coils:false, shutdowns:false, workdays:false, orders:false, parts:false };
+const firstSnap = { machines:false, records:false, coils:false, shutdowns:false, workdays:false, orders:false, parts:false, settings:false };
 const lastSynced = {};   // "machines/<id>" | "records/<id>" -> JSON文字列（エコー再送防止）
 
 function setSyncStatus(s){
@@ -1398,7 +1416,8 @@ function attachListeners(){
   db.collection('shutdowns').onSnapshot(s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
   db.collection('workdays').onSnapshot(s=>applySnap('workdays', s), e=>{ console.warn('workdays listen', e); setSyncStatus('offline'); });
   db.collection('parts').onSnapshot(s=>applySnap('parts', s), e=>console.warn('parts listen', e));   // 品番ごとの品名
-  if(!PLAN_DEMO) db.collection('orders').onSnapshot(s=>applySnap('orders', s), e=>console.warn('orders listen', e));
+  db.collection('settings').onSnapshot(s=>applySnap('settings', s), e=>console.warn('settings listen', e));   // デモ／本番の切り替え
+  ensureOrdersListener();
 }
 // いま見ている機械の状態を1つの文字列にしたもの（他端末の操作を検知するのに使う）
 function machineStateKey(id){
@@ -1407,9 +1426,17 @@ function machineStateKey(id){
   const os = openStop(r);
   return r.id + '|' + r.status + '|' + (os ? os.reason : '');
 }
+// 本番のときだけ注文を全端末で共有する（デモ中は読まない）
+let ordersUnsub = null;
+function ensureOrdersListener(){
+  if(!fbReady || !db) return;
+  if(isDemo()){ if(ordersUnsub){ try{ ordersUnsub(); }catch(e){} ordersUnsub = null; } return; }
+  if(ordersUnsub) return;
+  ordersUnsub = db.collection('orders').onSnapshot(s=>applySnap('orders', s), e=>console.warn('orders listen', e));
+}
 function applySnap(kind, snap){
   const beforeKey = (kind==='records' && initialSyncDone) ? machineStateKey(selectedMachineId) : null;
-  const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : kind==='workdays' ? store.workdays : kind==='orders' ? store.orders : kind==='parts' ? store.parts : store.records;
+  const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : kind==='workdays' ? store.workdays : kind==='orders' ? store.orders : kind==='parts' ? store.parts : kind==='settings' ? store.settings : store.records;
   snap.docChanges().forEach(ch=>{
     const id = ch.doc.id, data = ch.doc.data();
     const i = arr.findIndex(x=>x.id===id);
@@ -1425,6 +1452,7 @@ function applySnap(kind, snap){
     syncPush();           // 先に未送信ぶんをサーバーへ送り切る
     if(pruneOldRecords()){ try{ localStorage.setItem(KEY, storeJson()); }catch(e){} }  // その後で古い分を手放す
   }
+  if(kind==='settings'){ ensureOrdersListener(); applyPlanMode(); }   // 他の端末で本番に切り替えられた時
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
   // 他の端末が操作したときだけ知らせる（自分の操作は先にローカル反映済みなので鳴らない）
@@ -1449,7 +1477,8 @@ function syncPush(){
   store.shutdowns.forEach(sd=> cur['shutdowns/'+sd.id] = sd);
   (store.workdays||[]).forEach(w=> cur['workdays/'+w.id] = w);
   (store.parts||[]).forEach(p=> cur['parts/'+p.id] = p);
-  if(!PLAN_DEMO) (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);   // デモ中は送らない
+  (store.settings||[]).forEach(s=> cur['settings/'+s.id] = s);
+  if(!isDemo()) (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);   // デモ中は送らない
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -1922,7 +1951,7 @@ function renderStatus(){
   // 予定に次の注文があれば、それを先に出す（終了したらそのまま次を開始できる）
   let nx = null;
   try{ nx = selectedMachineId ? nextOrderFor(selectedMachineId) : null; }catch(e){ console.warn('nextOrder', e); }
-  const scanOff = PLAN_DEMO && isPC;   // デモ中のパソコンは品番を予定（注文）から入れる
+  const scanOff = isDemo() && isPC;   // デモ中のパソコンは品番を予定（注文）から入れる
   const generic = scanOff
     ? (nx ? '' : `<div class="idle-msg">${selectedMachineId
         ? `<span class="em">📅</span>${esc(selectedMachineId)} の次の予定がありません<div class="lock-hint">予定タブで注文を追加して、この機械の予定に入れてください</div>`
@@ -3699,7 +3728,8 @@ function renderCoilSettings(){
 function renderShutdownSettings(){
   const el=$('#shutdownList'); if(!el) return;
   const sel=$('#newSdMachine');
-  if(sel){ const cur=sel.value; sel.innerHTML='<option value="">全機械</option>'+store.machines.map(m=>`<option value="${esc(m.id)}">${esc(m.id)}</option>`).join(''); if([...sel.options].some(o=>o.value===cur)) sel.value=cur; }
+  // 機械を選ばずに「全機械」で登録してしまう事故を防ぐため、先頭は空にして必ず選んでもらう
+  if(sel){ const cur=sel.value; sel.innerHTML='<option value="">（機械を選ぶ）</option><option value="__ALL__">全機械（まとめて休業）</option>'+store.machines.map(m=>`<option value="${esc(m.id)}">${esc(m.id)}</option>`).join(''); if([...sel.options].some(o=>o.value===cur)) sel.value=cur; }
   const list=(store.shutdowns||[]).slice().sort((a,b)=> a.from<b.from?1:-1);
   if(!list.length){ el.innerHTML='<div class="set-note">休止期間は未登録です。下から追加してください。</div>'; return; }
   el.innerHTML=list.map(sd=>`<div class="mset">
@@ -3707,17 +3737,25 @@ function renderShutdownSettings(){
     <button class="x" onclick="deleteShutdown('${esc(sd.id)}')">✕</button>
   </div>`).join('');
 }
-function addShutdown(){
+async function addShutdown(){
   const from=$('#newSdFrom').value, to=$('#newSdTo').value, label=$('#newSdLabel').value.trim();
-  const machineId=($('#newSdMachine')||{}).value || '';
+  const picked=($('#newSdMachine')||{}).value;
   if(!from||!to){ toast('開始日と終了日を入力してください','error'); return; }
+  if(picked===''||picked==null){ toast('休止する機械を選んでください','error'); return; }
+  const machineId = picked==='__ALL__' ? '' : picked;
   const f=(from<=to)?from:to, t=(from<=to)?to:from;
+  if(!machineId){   // 全機械はまず確認する
+    const ok = await confirmDialog('全機械を休業にします',
+      `${store.machines.map(m=>m.id).join('・')} の全機械を ${f.replace(/-/g,'/')} 〜 ${t.replace(/-/g,'/')} 休業にします。1台だけの場合は機械を選び直してください。`, '全機械を休業にする', true);
+    if(!ok) return;
+  }
   store.shutdowns=store.shutdowns||[];
   store.shutdowns.push({ id:'s'+nowMs().toString(36)+Math.random().toString(36).slice(2,5), from:f, to:t, label, machineId });
   save();
   $('#newSdFrom').value=''; $('#newSdTo').value=''; $('#newSdLabel').value='';
+  if($('#newSdMachine')) $('#newSdMachine').value='';
   renderShutdownSettings(); processAutoDaily(); refreshActiveViews();
-  toast('休止期間を追加しました','success');
+  toast(`休止期間を追加しました（${machineId||'全機械'}）`,'success');
 }
 async function deleteShutdown(id){
   const ok=await confirmDialog('休止期間の削除','この休止期間を削除します。','削除する',true);
@@ -3732,7 +3770,7 @@ function openEditShutdown(id){
   const sd=(store.shutdowns||[]).find(s=>s.id===id); if(!sd) return;
   editSdId=id;
   $('#esdFrom').value=sd.from||''; $('#esdTo').value=sd.to||''; $('#esdLabel').value=sd.label||'';
-  const sel=$('#esdMachine'); sel.innerHTML='<option value="">全機械</option>'+store.machines.map(m=>`<option value="${esc(m.id)}">${esc(m.id)}</option>`).join(''); sel.value=sd.machineId||'';
+  const sel=$('#esdMachine'); sel.innerHTML='<option value="">全機械（まとめて休業）</option>'+store.machines.map(m=>`<option value="${esc(m.id)}">${esc(m.id)}</option>`).join(''); sel.value=sd.machineId||'';
   $('#editSdSheet').classList.add('active');
 }
 function closeEditSd(){ $('#editSdSheet').classList.remove('active'); }
@@ -3832,11 +3870,60 @@ const isPC = !!(window.matchMedia && matchMedia('(hover:hover) and (pointer:fine
 document.body.classList.toggle('is-pc', isPC);
 // デモ中のパソコン：日報入力の「バーコードを読み取る」は外し、「注文を追加」で入れる（スマホはそのまま）
 // デモの部分には「🧪 デモ」の印を付ける（本番の画面と見分けられるように）
-const DEMO_CHIP = PLAN_DEMO ? '<span class="demo-chip">🧪 デモ</span>' : '';
-if(PLAN_DEMO){ const t = document.querySelector('.tab[data-tab=plan]'); if(t) t.innerHTML = '<span class="ic">🧪</span>予定（デモ）'; }
-if(PLAN_DEMO && isPC){
-  $('#stepScan').hidden = true; $('#stepScanNote').hidden = false; $('#stepStartNum').textContent = '2';
+// デモ／本番の切り替えを画面に反映（タブ名・日報入力の品番欄・設定の案内）
+function applyPlanMode(){
+  const demo = isDemo();
+  const t = document.querySelector('.tab[data-tab=plan]');
+  if(t) t.innerHTML = demo ? '<span class="ic">🧪</span>予定（デモ）' : '<span class="ic">🗓️</span>予定';
+  const hide = demo && isPC;   // デモ中のパソコンは品番・コイル・回転数を「注文を追加」で入れる
+  if($('#stepScan')) $('#stepScan').hidden = hide;
+  if($('#stepScanNote')) $('#stepScanNote').hidden = !hide;
+  if($('#stepStartNum')) $('#stepStartNum').textContent = hide ? '2' : '3';
+  renderPlanMode();
 }
+/* 設定タブ：予定タブをデモから本番に切り替える */
+function renderPlanMode(){
+  const el = $('#planModeBody'); if(!el) return;
+  const demo = isDemo();
+  const live = (store.orders||[]).filter(o=> !o.done).length;
+  el.innerHTML = demo
+    ? `<div class="set-note" style="margin-top:0">今は <b>🧪 デモ</b> です。注文はこのパソコンの中だけに保存され、他の端末やスマホには出ません。</div>
+       <div class="danger-row" style="margin-top:11px">
+         <button class="ver-btn" onclick="planGoLive(true)">今の注文（${live}件）ごと本番にする</button>
+         <button class="btn-out" onclick="planGoLive(false)">注文を消して本番にする</button>
+       </div>
+       <div class="set-note">本番にすると、注文が全端末で共有され、作業者のスマホの日報入力にも「次の予定」が出ます。予定表（このタブ）はパソコンだけの表示のままです。</div>`
+    : `<div class="set-note" style="margin-top:0">今は <b>本番</b> です。注文（${live}件）は全端末で共有され、作業者のスマホにも「次の予定」が出ます。</div>
+       <button class="btn-ghost-danger" style="margin-top:11px" onclick="planBackToDemo()">デモに戻す</button>
+       <div class="set-note">デモに戻すと、注文はこのパソコンの中だけの扱いになり、スマホには出なくなります。</div>`;
+}
+async function planGoLive(keepOrders){
+  const n = (store.orders||[]).filter(o=> !o.done).length;
+  const ok = await confirmDialog('予定を本番にする',
+    keepOrders
+      ? `予定タブを本番に切り替えます。今このパソコンに入っている注文 ${n}件 もそのまま本番に入り、全端末で共有されます。作業者のスマホの日報入力にも「次の予定」が出ます。`
+      : `注文をすべて消してから、予定タブを本番に切り替えます。これから入れる注文が全端末で共有されます。`,
+    '本番にする');
+  if(!ok) return;
+  if(!keepOrders) store.orders = [];
+  setSetting('planDemo', false);         // 全端末に伝わる
+  try{ localStorage.setItem(PLAN_DEMO_KEY, '[]'); }catch(e){}
+  ensureOrdersListener();
+  save();                                 // 注文をサーバーへ送る
+  applyPlanMode(); refreshActiveViews();
+  toast('予定を本番にしました。注文は全端末で共有されます', 'success');
+}
+async function planBackToDemo(){
+  const ok = await confirmDialog('デモに戻す',
+    '予定タブをデモに戻します。注文はこのパソコンの中だけの扱いになり、スマホの「次の予定」は出なくなります。サーバーに入っている注文は消えません。', 'デモに戻す', true);
+  if(!ok) return;
+  setSetting('planDemo', true);
+  try{ localStorage.setItem(PLAN_DEMO_KEY, JSON.stringify(store.orders||[])); }catch(e){}
+  ensureOrdersListener();
+  applyPlanMode(); refreshActiveViews();
+  toast('デモに戻しました');
+}
+applyPlanMode();
 // デモ：見本の注文を入れる（実際に作ったことのある品番で、今日からの納期にする）
 function planDemoSample(){
   const today = nowDate(); today.setHours(0,0,0,0);
@@ -4147,7 +4234,7 @@ function lastCoilOf(partNo){
 function renderPlan(){
   if(planDrag){ planDirty = true; return; }   // ドラッグ中に描き直すとドラッグが切れる
   if(!$('#page-plan')) return;
-  $('#planDemo').hidden = !PLAN_DEMO;
+  $('#planDemo').hidden = !isDemo();
   if(planAutoDone()) save();   // 終わった作業の注文は完了に
   // 取り込んだ作業で、残りの数量・納期がまだの物（バーが細くて押しにくいので、ここからも入れられるように）
   const todo = store.orders.filter(o=> o.needsInput && !o.done && validOrder(o));
@@ -4382,7 +4469,7 @@ function planLinkStart(rec, orderId){
   if(!o) return null;
   const earlier = planPullForward(o, m);
   o.startedAt = rec.startTime; o.recId = rec.id;
-  if(!PLAN_DEMO) rec.orderId = o.id;   // デモ中は日報の記録に印を付けない
+  if(!isDemo()) rec.orderId = o.id;   // デモ中は日報の記録に印を付けない
   return { o, earlier };
 }
 // 待機中の画面に出す「次の予定」
@@ -4390,7 +4477,7 @@ function planNextCard(nx){
   const o = nx.o, nowP = planTodayPos(o.machineId);
   const early = nx.s.d > nowP.d;
   return `<div class="next-plan">
-    <div class="np-h">📅 次の予定${DEMO_CHIP}</div>
+    <div class="np-h">📅 次の予定${demoChip()}</div>
     <div class="np-part">${esc(o.partNo)}</div>
     <div class="np-sub">${o.qty.toLocaleString()}個 ・ 納期 <b>${numMDW(dayNum(o.due))}</b><br>予定 ${numMDW(nx.s.d)}〜${numMDW(nx.last)}${nx.c.ok ? `（見込み${planFmtDays(nx.c.need)}日）` : ''}${nx.late ? ' <span class="np-late">納期に遅れる見込み</span>' : ''}</div>
     <button class="btn-big btn-start" onclick="startFromOrder('${o.id}')"><span class="ic">▶</span>この予定で開始</button>
@@ -4526,7 +4613,7 @@ function openOrderSheet(id){
   osId = o ? o.id : null;
   osCoilTouched = !!o;
   osSpeedTouched = !!(o && (o.spm || o.spp));
-  $('#osTitle').innerHTML = esc(!o ? '注文を追加' : o.needsInput ? '作業中の注文：残りの数量と納期を入れてください' : '注文の編集') + DEMO_CHIP;
+  $('#osTitle').innerHTML = esc(!o ? '注文を追加' : o.needsInput ? '作業中の注文：残りの数量と納期を入れてください' : '注文の編集') + demoChip();
   // 過去の品番（全部の機械・新しい順）。選ぶとコイル・回転数も呼び出す
   const seen = new Map();
   store.records.forEach(r=>{
@@ -4664,7 +4751,7 @@ async function osDelete(){
   const ok = await confirmDialog('注文の削除', `${o.partNo}（${o.qty.toLocaleString()}個）の注文を削除します。`, '削除する', true);
   if(!ok) return;
   store.orders = store.orders.filter(x=>x.id!==o.id);
-  if(!PLAN_DEMO) delDoc('orders', o.id);
+  if(!isDemo()) delDoc('orders', o.id);
   save(); renderPlan(); toast('削除しました');
 }
 
@@ -4695,7 +4782,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.45';
+const APP_VERSION = '2026-06-28.46';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
