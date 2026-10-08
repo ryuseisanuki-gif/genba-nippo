@@ -1018,7 +1018,7 @@
       </div>
       <button class="ver-btn" onclick="forceUpdate()">最新版にする</button>
     </div>
-    <div class="set-note">更新のお知らせが出ない端末は、このボタンを押すと確実に最新版になります（記録は消えません）。</div>
+    <div class="set-note">新しい版が出たら<b>自動で更新</b>されます（入力中・読み取り中は待ち、手が空いた時や画面を閉じている間に入れ替わります）。すぐ更新したいときはこのボタンを押してください。記録は消えません。</div>
   </div>
 </section>
 
@@ -4812,7 +4812,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.47';
+const APP_VERSION = '2026-06-28.48';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -4851,6 +4851,7 @@ async function checkForUpdate(){
       updateLatest = v;
       const b = $('#updateBar'); if(b) b.classList.remove('hidden');
       const h = $('#hdUpdate'); if(h) h.classList.remove('hidden');   // 上部にも出す（下バーが隠れる端末対策）
+      startAutoUpdate();                                             // 手が空いたら自動で新しい版にする
     }
     showVerStatus(v, false);
   }catch(e){ showVerStatus(null, true); }
@@ -4859,6 +4860,35 @@ function applyUpdate(){
   // 版番号＋時刻の両方を付けてURLを必ず新しくする（古いHTMLがキャッシュから出るのを防ぐ）
   const v = (updateLatest || 'x') + '.' + nowMs();
   location.replace(location.pathname + '?v=' + encodeURIComponent(v));
+}
+
+/* ===== 新しい版を自動で適用する（押してもらわなくても更新される） =====
+   入力中・読み取り中・操作直後は待つ。画面を見ていない時はすぐ入れ替える。 */
+const AUTO_UPD_KEY = 'genbaLastAutoUpd';
+const AUTO_UPD_QUIET = 20000;      // 最後に触ってからこれだけ空いたら入れ替える
+let lastInteraction = 0, autoUpdTimer = null;
+['pointerdown','keydown','touchstart'].forEach(ev=>
+  document.addEventListener(ev, ()=>{ lastInteraction = /*RAW*/Date.now(); }, { passive:true, capture:true }));
+function autoUpdateAllowed(){
+  // 同じ版で何度も読み直すのを防ぐ（キャッシュで古いHTMLが返る場合の空回り対策）
+  try{ const t = parseInt(localStorage.getItem(AUTO_UPD_KEY) || '0'); if(/*RAW*/Date.now() - t < 600000) return false; }catch(e){}
+  if(document.querySelector('.ov.active')) return false;                       // 入力シートが開いている
+  if($('#scanModal') && $('#scanModal').classList.contains('active')) return false;   // バーコード読み取り中
+  const ae = document.activeElement;
+  if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return false;         // 何か入力中
+  if(!document.hidden && /*RAW*/Date.now() - lastInteraction < AUTO_UPD_QUIET) return false;   // 操作直後
+  return true;
+}
+function maybeAutoUpdate(){
+  if(!updateLatest || updateLatest === APP_VERSION) return;
+  if(!autoUpdateAllowed()) return;
+  try{ localStorage.setItem(AUTO_UPD_KEY, String(/*RAW*/Date.now())); }catch(e){}
+  if(!document.hidden) toast('新しい版に更新します…');
+  setTimeout(applyUpdate, document.hidden ? 0 : 600);
+}
+function startAutoUpdate(){
+  maybeAutoUpdate();
+  if(!autoUpdTimer) autoUpdTimer = setInterval(maybeAutoUpdate, 10000);
 }
 // お知らせバーが出ない端末でも、設定から確実に最新版を取り直せるようにする
 function forceUpdate(){
@@ -4899,7 +4929,7 @@ function init(){
   scheduleBoundaryTick();                                    // 休憩の開始・終了ぴったりに反映する
   // 画面を見た瞬間に最新にする（スリープ中はタイマーが止まるので、休憩明けの反映が遅れて見えていた）
   document.addEventListener('visibilitychange', ()=>{
-    if(document.hidden) return;
+    if(document.hidden){ maybeAutoUpdate(); return; }   // 見ていない間に入れ替えておく
     checkForUpdate();
     tickBoundaries();
     scheduleBoundaryTick();
