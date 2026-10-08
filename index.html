@@ -1592,6 +1592,34 @@ function healPendingDates(){
   if(n) save();
   return n;
 }
+// 同じ機械で有効な記録が2つ以上あるときは、いちばん新しく始めた記録だけを残し、
+// 古い方は新しい作業が始まった時刻で終了にする（個数は未入力で残す）。
+// 古い記録が残ったままだと、新しい記録の停止が帯グラフや稼働率に反映されない。
+function healDuplicateActives(){
+  let n = 0;
+  store.machines.forEach(m=>{
+    const act = store.records.filter(r=> r.machineId===m.id && (r.status==='running'||r.status==='stopped'||r.status==='overnight'));
+    if(act.length < 2) return;
+    const sorted = act.slice().sort((a,b)=> new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+    const keep = sorted[0], keepT = new Date(keep.startTime).getTime();
+    if(nowMs() - keepT < 120000) return;        // 始めた直後は、同時操作の行き違いかもしれないので待つ
+    sorted.slice(1).forEach(r=>{
+      const endT = Math.max(new Date(r.startTime).getTime() + 60000, Math.min(keepT, nowMs()));
+      const iso = new Date(endT).toISOString();
+      closeAllOpenStops(r, iso);
+      r.endTime = iso; r.lastRunEnd = null;
+      const dk = dateKey(new Date(endT));
+      r.pendingDates = r.pendingDates || [];
+      if(!(r.dailyCounts||[]).some(c=> c.date===dk) && !r.pendingDates.includes(dk)) r.pendingDates.push(dk);
+      r.qty = recordTotalQty(r);
+      r.status = 'done';
+      delete r.overnightDate; r.pendingCount = false;
+      n++;
+    });
+  });
+  if(n) save();
+  return n;
+}
 function healOpenStops(){
   const nowIso = nowDate().toISOString();
   let fixed = 0;
@@ -2654,7 +2682,7 @@ function scheduleBoundaryTick(){
 function tickBoundaries(){
   const changed = processDayBoundaries();
   const brk = processBreaks();
-  const heal = healOpenStops() + healPendingDates();   // 閉じ忘れの停止・未入力の印の取りこぼしを直す
+  const heal = healOpenStops() + healPendingDates() + healDuplicateActives();   // 閉じ忘れの停止・未入力の印・記録の二重を直す
   const auto = processAutoDaily();
   notifyLongStops();                // 再開の押し忘れを知らせる
   if(changed || brk || heal || auto){ refreshActiveViews(); notifyPendingCarry(); }
@@ -3191,10 +3219,12 @@ function summaryFor(machineId, dayDate){
   store.records.forEach(r=>{
     if(r.machineId!==machineId) return;
     const endT=endRefT(r);
+    const rs=new Date(r.startTime).getTime();
     (r.stops||[]).forEach(s=>{
       if(s.reason==='休憩') return;   // 休憩は別集計（breakMin）
-      const sf=new Date(s.from).getTime();
-      const stt=s.to?new Date(s.to).getTime():endT;
+      // 記録が動いていた範囲だけ数える（帯グラフと同じ扱いにする）
+      const sf=Math.max(new Date(s.from).getTime(), rs);
+      const stt=Math.min(s.to?new Date(s.to).getTime():endT, endT);
       let m=clipMin(sf,stt,wsT,weEff);
       if(m<=0) return;
       // 休憩と被る分は差し引く（休憩を優先し二重計上を防ぐ）
@@ -4782,7 +4812,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.46';
+const APP_VERSION = '2026-06-28.47';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
