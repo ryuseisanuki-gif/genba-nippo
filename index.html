@@ -578,8 +578,13 @@
   .mrow-id{font-family:var(--mono);font-weight:800;font-size:14.5px;color:var(--ink);word-break:break-all;}
   .mrow-m{font-size:11px;font-weight:800;color:var(--ink2);background:var(--surface2);border-radius:6px;padding:2px 7px;font-family:var(--mono);}
   .mrow-new{font-size:11px;font-weight:800;color:var(--blue);background:#e8f0fb;border-radius:6px;padding:2px 7px;}
-  .mrow .x{margin-left:auto;color:var(--ink3);font-size:18px;padding:2px 6px;line-height:1;}
-  .mrow .pn-in{width:100%;}
+  .mrow-name{font-size:14px;font-weight:600;color:var(--ink);}
+  .mrow-none{color:var(--ink3);font-weight:600;font-size:13px;}
+  .mrow-ed{margin-left:auto;padding:7px 13px;border-radius:9px;border:1.5px solid var(--orange);background:#fff7f0;color:var(--orange-d);font-size:12.5px;font-weight:800;font-family:var(--sans);}
+  .mrow-ed:active{background:#fde9d6;}
+  .mrow.editing{border-color:#f0c9a3;}
+  #masterEditBtn{margin-bottom:10px;}
+  #masterEditBtn.on{background:var(--orange);border-color:var(--orange);color:#fff;}
   .mset .x:active{color:var(--stop);}
   .add-row{display:grid;grid-template-columns:1fr 1.3fr auto;gap:8px;margin-top:10px;}
   .add-row input{
@@ -977,12 +982,15 @@
 <section class="page" id="page-master">
   <div class="card set-card">
     <h3>🏷️ 品番マスター <span id="masterCount" class="step-hint"></span></h3>
-    <div class="add-row">
-      <input type="text" id="newPartNo" class="mi" placeholder="品番" autocomplete="off">
-      <input type="text" id="newPartName" placeholder="品名（任意）" autocomplete="off">
-      <button class="btn-add" onclick="addPartMaster()">追加</button>
+    <button id="masterEditBtn" class="btn-out" onclick="toggleMasterEdit()">✎ 編集モードにする</button>
+    <div id="masterAddBox" hidden>
+      <div class="add-row">
+        <input type="text" id="newPartNo" class="mi" placeholder="品番" autocomplete="off">
+        <input type="text" id="newPartName" placeholder="品名（任意）" autocomplete="off">
+        <button class="btn-add" onclick="addPartMaster()">追加</button>
+      </div>
     </div>
-    <div class="set-note">作業や注文で使った品番は自動でここに登録されます。品名を入れると、日報入力の「過去の品番」や記録、予定の注文に出ます（全端末で共有）。</div>
+    <div class="set-note">作業や注文で使った品番は自動でここに登録されます。品名を直したり品番を追加・削除するときは「編集モード」にしてください（全端末で共有）。</div>
     <input type="text" id="masterSearch" class="rec-filter" style="width:100%;margin-top:10px" placeholder="🔍 品番・品名・機械（P-6など）で絞り込み" oninput="masterFilter=this.value; renderMaster()">
     <div class="rec-chips" id="masterMachChips" style="margin:10px 0 0"></div>
   </div>
@@ -1249,6 +1257,22 @@
   </div>
 </div>
 <div id="planTip" hidden></div>
+<div class="ov" id="partSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>品番の編集</h3>
+    <div class="of">
+      <label>品番<input type="text" id="psPartNo" class="of-in mono" autocomplete="off"></label>
+      <div class="set-note" id="psPartNote" style="margin:-4px 0 10px"></div>
+      <label>品名（任意）<input type="text" id="psName" class="of-in" autocomplete="off" placeholder="空でもOK（例 SUS430棚柱）"></label>
+    </div>
+    <div class="sheet-actions">
+      <button class="b-cancel" onclick="closePartSheet()">キャンセル</button>
+      <button class="b-ok" onclick="savePartSheet()">保存</button>
+    </div>
+    <div class="os-more"><button class="danger" onclick="deletePartFromSheet()">🗑 この品番を削除</button></div>
+  </div>
+</div>
 <div id="updateBar" class="hidden">
   <span>新しいバージョンがあります</span>
   <button class="u-go" onclick="applyUpdate()">今すぐ更新</button>
@@ -1829,7 +1853,8 @@ function partHistoryFor(machineId){
     const t = new Date(r.startTime).getTime();
     if(!seen.has(p) || seen.get(p) < t) seen.set(p, t);
   });
-  return [...seen.entries()].sort((a,b)=> b[1]-a[1]).map(([p,t])=>({ partNo:p, at:t }));
+  return [...seen.entries()].sort((a,b)=> b[1]-a[1]).map(([p,t])=>({ partNo:p, at:t }))
+    .filter(x=> !partHidden(x.partNo));   // 品番マスターで削除した品番は出さない
 }
 function renderPartHistory(){
   const sel = $('#partHistory'); if(!sel) return;
@@ -1880,7 +1905,8 @@ function allPartNos(){
   });
   (store.orders||[]).forEach(o=>{ const p=(o.partNo||'').trim(); if(p && !seen.has(p)) seen.set(p, 0); });
   (store.parts||[]).forEach(x=>{ const p=(x.partNo||'').trim(); if(p && !seen.has(p)) seen.set(p, 0); });
-  return [...seen.entries()].sort((a,b)=> b[1]-a[1]).map(([partNo, at])=>({ partNo, at }));
+  return [...seen.entries()].sort((a,b)=> b[1]-a[1]).map(([partNo, at])=>({ partNo, at }))
+    .filter(x=> !partHidden(x.partNo));   // 品番マスターで削除した品番は出さない
 }
 // その機械でその品番を最後に使った記録（コイル・回転数の呼び出し元）
 function lastRecordOf(machineId, partNo){
@@ -3804,36 +3830,91 @@ function renderMaster(){
   const all = allPartNos().length;
   $('#masterCount').textContent = (q || masterMachine) ? `${list.length} / ${all}件` : `${all}件`;
   if(!list.length){ el.innerHTML = '<div class="rec-empty-note">該当する品番がありません</div>'; return; }
+  // 編集モードの切り替え表示
+  $('#masterEditBtn').textContent = masterEdit ? '✓ 編集モードを終える' : '✎ 編集モードにする';
+  $('#masterEditBtn').classList.toggle('on', masterEdit);
+  $('#masterAddBox').hidden = !masterEdit;
   el.innerHTML = list.map(x=>{
-    const ms = partMachines(x.partNo), used = partIsUsed(x.partNo);
-    return `<div class="mrow">
+    const ms = partMachines(x.partNo), nm = partNameOf(x.partNo);
+    return `<div class="mrow${masterEdit?' editing':''}">
       <div class="mrow-top">
         <span class="mrow-id">${esc(x.partNo)}</span>
         ${ms.length ? `<span class="mrow-m">${ms.map(esc).join('・')}</span>` : '<span class="mrow-new">未使用</span>'}
-        ${used ? '' : `<button class="x" onclick="deletePartMaster('${esc(x.partNo)}')">✕</button>`}
+        ${masterEdit ? `<button class="mrow-ed" onclick="openPartSheet('${esc(x.partNo)}')">✎ 編集</button>` : ''}
       </div>
-      <input type="text" class="pn-in" value="${esc(partNameOf(x.partNo))}" placeholder="品名（任意）" onchange="setPartName('${esc(x.partNo)}', this.value)">
+      <div class="mrow-name">${nm ? esc(nm) : '<span class="mrow-none">（品名なし）</span>'}</div>
     </div>`;
   }).join('');
 }
+/* 編集モード：これをオンにしないと品番マスターは書き換えられない */
+let masterEdit = false;
+function toggleMasterEdit(){ masterEdit = !masterEdit; renderMaster(); }
+// 削除した品番（記録で使っているもの）は一覧から隠す
+function partHidden(partNo){ const p = (store.parts||[]).find(x=> x.partNo===partNo); return !!(p && p.hidden); }
+let editPartNo = null;
+function openPartSheet(partNo){
+  if(!masterEdit) return;
+  editPartNo = partNo;
+  const used = partIsUsed(partNo);
+  $('#psPartNo').value = partNo;
+  $('#psPartNo').disabled = used;
+  $('#psPartNote').textContent = used ? '作業や注文で使っている品番なので、品番そのものは変更できません（品名は変更できます）' : '';
+  $('#psName').value = partNameOf(partNo);
+  $('#partSheet').classList.add('active');
+}
+function closePartSheet(){ $('#partSheet').classList.remove('active'); }
+function savePartSheet(){
+  const oldNo = editPartNo, newNo = $('#psPartNo').value.trim(), name = $('#psName').value.trim();
+  if(!oldNo) return;
+  if(!newNo){ toast('品番を入れてください','error'); return; }
+  if(newNo !== oldNo){
+    if(partIsUsed(oldNo)){ toast('使っている品番は変更できません','error'); return; }
+    if(allPartNos().some(x=> x.partNo===newNo)){ toast('その品番はすでにあります','error'); return; }
+    const p = (store.parts||[]).find(x=> x.partNo===oldNo);
+    if(p){ store.parts = store.parts.filter(x=> x!==p); delDoc('parts', p.id); }
+    store.parts.push({ id: partIdOf(newNo), partNo:newNo, name, at: nowIso() });
+    save();
+  } else {
+    setPartName(oldNo, name);
+  }
+  closePartSheet(); renderMaster(); renderPartHistory();
+  toast('保存しました','success');
+}
+async function deletePartFromSheet(){
+  const partNo = editPartNo; if(!partNo) return;
+  closePartSheet();
+  const used = partIsUsed(partNo);
+  const ok = await confirmDialog('品番の削除',
+    used ? `${partNo} を品番マスターと「過去の品番」の一覧から消します。これまでの日報の記録や注文は消えません。本当に削除しますか？`
+         : `${partNo} を品番マスターから消します。本当に削除しますか？`,
+    '削除する', true);
+  if(!ok){ openPartSheet(partNo); return; }
+  const p = (store.parts||[]).find(x=> x.partNo===partNo);
+  if(used){   // 記録で使っている品番は消せないので、一覧から隠す（また追加すれば戻る）
+    if(p){ p.hidden = true; p.at = nowIso(); }
+    else store.parts.push({ id: partIdOf(partNo), partNo, name:'', hidden:true, at: nowIso() });
+  } else {
+    store.parts = (store.parts||[]).filter(x=> x.partNo!==partNo);
+    if(p) delDoc('parts', p.id);
+  }
+  save(); renderMaster(); renderPartHistory();
+  toast(`${partNo} を削除しました`);
+}
 function addPartMaster(){
+  if(!masterEdit) return;
   const p = $('#newPartNo').value.trim(), n = $('#newPartName').value.trim();
   if(!p){ toast('品番を入れてください','error'); return; }
+  const hid = (store.parts||[]).find(x=> x.partNo===p && x.hidden);
+  if(hid){   // 削除して隠していた品番は、もう一度追加すると戻る
+    hid.hidden = false; if(n) hid.name = n; hid.at = nowIso();
+    save(); $('#newPartNo').value = ''; $('#newPartName').value = '';
+    renderMaster(); renderPartHistory(); toast(`品番 ${p} を元に戻しました`,'success'); return;
+  }
   if(allPartNos().some(x=> x.partNo === p)){ toast('その品番はすでにあります','error'); return; }
   setPartName(p, n);
   $('#newPartNo').value = ''; $('#newPartName').value = '';
   renderMaster();
   toast(`品番 ${p} を登録しました`,'success');
-}
-async function deletePartMaster(partNo){
-  if(partIsUsed(partNo)){ toast('使われている品番は消せません','error'); return; }
-  const ok = await confirmDialog('品番の削除', `${partNo} を品番マスターから消します。`, '削除する', true);
-  if(!ok) return;
-  const p = (store.parts||[]).find(x=> x.partNo === partNo);
-  store.parts = (store.parts||[]).filter(x=> x.partNo !== partNo);
-  if(p) delDoc('parts', p.id);
-  save(); renderMaster();
-  toast('削除しました');
 }
 /* ===== COILS（コイル在庫） ===== */
 function renderCoilSelect(){
@@ -4856,6 +4937,7 @@ function openOrderSheet(id){
     if(!cur || cur.t < t) seen.set(p, { t, m:r.machineId });
   });
   store.orders.forEach(x=>{ if(x.partNo && !seen.has(x.partNo)) seen.set(x.partNo, { t:0, m:'' }); });
+  [...seen.keys()].forEach(p=>{ if(partHidden(p)) seen.delete(p); });   // 削除した品番は出さない
   $('#osHistory').innerHTML = '<option value="">（過去の品番から選ぶ）</option>' +
     [...seen.entries()].sort((a,b)=> b[1].t - a[1].t).map(([p,x])=>{
       const n = partNameOf(p);
@@ -5016,7 +5098,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.56';
+const APP_VERSION = '2026-06-28.57';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
