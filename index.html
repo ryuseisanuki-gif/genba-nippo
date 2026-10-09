@@ -571,6 +571,15 @@
   .pn-in{flex:1;min-width:0;background:#fff;border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:14px;color:var(--ink);font-family:var(--sans);}
   .pn-in:focus{outline:none;border-color:var(--orange);}
   .mset .mi-id.pn-id{flex:0 0 118px;word-break:break-all;font-size:13.5px;}
+  /* 品番マスター */
+  #page-master .set-card h3 .step-hint{margin-left:auto;}
+  .mrow{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:7px;}
+  .mrow-top{display:flex;align-items:center;gap:8px;margin-bottom:7px;}
+  .mrow-id{font-family:var(--mono);font-weight:800;font-size:14.5px;color:var(--ink);word-break:break-all;}
+  .mrow-m{font-size:11px;font-weight:800;color:var(--ink2);background:var(--surface2);border-radius:6px;padding:2px 7px;font-family:var(--mono);}
+  .mrow-new{font-size:11px;font-weight:800;color:var(--blue);background:#e8f0fb;border-radius:6px;padding:2px 7px;}
+  .mrow .x{margin-left:auto;color:var(--ink3);font-size:18px;padding:2px 6px;line-height:1;}
+  .mrow .pn-in{width:100%;}
   .mset .x:active{color:var(--stop);}
   .add-row{display:grid;grid-template-columns:1fr 1.3fr auto;gap:8px;margin-top:10px;}
   .add-row input{
@@ -837,6 +846,7 @@
   <button class="tab" data-tab="records"><span class="ic">📋</span>記録</button>
   <button class="tab" data-tab="summary"><span class="ic">📊</span>日別集計</button>
   <button class="tab" data-tab="plan"><span class="ic">🗓️</span>予定</button>
+  <button class="tab" data-tab="master"><span class="ic">🏷️</span>品番</button>
   <button class="tab" data-tab="settings"><span class="ic">⚙️</span>設定</button>
 </nav>
 
@@ -963,6 +973,21 @@
   <div class="set-note">速さは、その機械でその品番を作った日の記録（動いていた時間あたりの個数）から計算します。記録が5日未満の品番は理論値（回転数÷何回転で1個）で、1日の稼働を90%として計算します。土日祝と休止日は数えません。納期の日までに作り終われば「間に合う」です。</div>
 </section>
 
+<!-- ===== 品番マスター ===== -->
+<section class="page" id="page-master">
+  <div class="card set-card">
+    <h3>🏷️ 品番マスター <span id="masterCount" class="step-hint"></span></h3>
+    <div class="add-row">
+      <input type="text" id="newPartNo" class="mi" placeholder="品番" autocomplete="off">
+      <input type="text" id="newPartName" placeholder="品名（任意）" autocomplete="off">
+      <button class="btn-add" onclick="addPartMaster()">追加</button>
+    </div>
+    <div class="set-note">作業や注文で使った品番は自動でここに登録されます。品名を入れると、日報入力の「過去の品番」や記録、予定の注文に出ます（全端末で共有）。</div>
+    <input type="text" id="masterSearch" class="rec-filter" style="width:100%;margin-top:10px" placeholder="🔍 品番・品名で絞り込み" oninput="masterFilter=this.value; renderMaster()">
+  </div>
+  <div id="masterList"></div>
+</section>
+
 <!-- ===== SETTINGS ===== -->
 <section class="page" id="page-settings">
   <div class="card set-card">
@@ -990,12 +1015,6 @@
   <div class="card set-card pc-only" id="planModeCard">
     <h3>🗓️ 予定タブ（デモ／本番）</h3>
     <div id="planModeBody"></div>
-  </div>
-
-  <div class="card set-card">
-    <h3>🏷️ 品番の品名</h3>
-    <div id="partNameList"></div>
-    <div class="set-note">品名は<b>任意</b>です。入れると、日報入力の「過去の品番」や記録、予定の注文に品名が出ます（全端末で共有）。空にすれば品名なしに戻ります。</div>
   </div>
 
   <div class="card set-card">
@@ -1718,6 +1737,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     if(t.dataset.tab==='records') renderRecords();
     if(t.dataset.tab==='summary') renderSummary();
     if(t.dataset.tab==='plan'){ planScrollToday = true; renderPlan(); }
+    if(t.dataset.tab==='master') renderMaster();
     if(t.dataset.tab==='settings') renderMachineSettings();
   };
 });
@@ -2644,10 +2664,13 @@ function refreshHeavyViews(){
     if($('#page-plan').classList.contains('active')){   // 他端末で入れた注文・予定も反映
       try{ renderPlan(); }catch(e){ console.warn('renderPlan', e); }   // 予定の不具合で他の画面の更新を止めない
     }
+    if($('#page-master').classList.contains('active')){
+      const ae = document.activeElement;   // 品名を打っている途中は描き直さない（入力が消えるため）
+      if(!(ae && $('#page-master').contains(ae) && /^(INPUT|TEXTAREA)$/.test(ae.tagName))) renderMaster();
+    }
     if($('#page-settings').classList.contains('active')){
       renderMachineSettings();
       renderCoilSettings();
-      renderPartNames();
       renderAutoSettings();
       renderShutdownSettings();   // 他端末で追加/編集した休止期間もリアルタイム反映
       renderBackupNote();
@@ -2710,6 +2733,7 @@ function tickBoundaries(){
   const changed = processDayBoundaries();
   const brk = processBreaks();
   const heal = healOpenStops() + healPendingDates() + healDuplicateActives();   // 閉じ忘れの停止・未入力の印・記録の二重を直す
+  syncPartsMaster();                // 新しく使われた品番を品番マスターに登録
   const auto = processAutoDaily();
   notifyLongStops();                // 再開の押し忘れを知らせる
   if(changed || brk || heal || auto){ refreshActiveViews(); notifyPendingCarry(); }
@@ -3730,16 +3754,70 @@ async function deleteMachine(id){
   save(); renderMachineSettings(); renderMachineGrid(); renderStatus();
   toast('削除しました');
 }
-/* 品番の品名を設定タブで編集する */
-function renderPartNames(){
-  const el = $('#partNameList'); if(!el) return;
-  const list = allPartNos();
-  if(!list.length){ el.innerHTML = '<div class="set-note">まだ品番がありません。</div>'; return; }
-  el.innerHTML = list.map(x=>`
-    <div class="mset">
-      <span class="mi-id pn-id">${esc(x.partNo)}</span>
+/* ===== 品番マスター（タブ） ===== */
+let masterFilter = '';
+// 作業や注文で使った品番を、自動で品番マスターに登録する
+function syncPartsMaster(){
+  // 全端末の品名を読み込み終わってから（先に空の品名で登録すると、他の端末で入れた品名を上書きしてしまうため）
+  if(!fbReady || !firstSnap.parts || !initialSyncDone) return 0;
+  let n = 0;
+  store.parts = store.parts || [];
+  allPartNos().forEach(x=>{
+    if(!store.parts.some(p=> p.partNo === x.partNo)){
+      store.parts.push({ id: partIdOf(x.partNo), partNo: x.partNo, name:'', at: nowIso() });
+      n++;
+    }
+  });
+  if(n) save();
+  return n;
+}
+function partMachines(partNo){
+  const s = new Set();
+  store.records.forEach(r=>{ if((r.partNo||'').trim() === partNo) s.add(r.machineId); });
+  (store.orders||[]).forEach(o=>{ if(o.partNo === partNo && o.machineId) s.add(o.machineId); });
+  return [...s];
+}
+function partIsUsed(partNo){
+  return store.records.some(r=> (r.partNo||'').trim() === partNo) || (store.orders||[]).some(o=> o.partNo === partNo);
+}
+function renderMaster(){
+  const el = $('#masterList'); if(!el) return;
+  syncPartsMaster();
+  const q = masterFilter.trim().toLowerCase();
+  const list = allPartNos().filter(x=> !q || x.partNo.toLowerCase().includes(q) || partNameOf(x.partNo).toLowerCase().includes(q));
+  const all = allPartNos().length;
+  $('#masterCount').textContent = q ? `${list.length} / ${all}件` : `${all}件`;
+  if(!list.length){ el.innerHTML = '<div class="rec-empty-note">該当する品番がありません</div>'; return; }
+  el.innerHTML = list.map(x=>{
+    const ms = partMachines(x.partNo), used = partIsUsed(x.partNo);
+    return `<div class="mrow">
+      <div class="mrow-top">
+        <span class="mrow-id">${esc(x.partNo)}</span>
+        ${ms.length ? `<span class="mrow-m">${ms.map(esc).join('・')}</span>` : '<span class="mrow-new">未使用</span>'}
+        ${used ? '' : `<button class="x" onclick="deletePartMaster('${esc(x.partNo)}')">✕</button>`}
+      </div>
       <input type="text" class="pn-in" value="${esc(partNameOf(x.partNo))}" placeholder="品名（任意）" onchange="setPartName('${esc(x.partNo)}', this.value)">
-    </div>`).join('');
+    </div>`;
+  }).join('');
+}
+function addPartMaster(){
+  const p = $('#newPartNo').value.trim(), n = $('#newPartName').value.trim();
+  if(!p){ toast('品番を入れてください','error'); return; }
+  if(allPartNos().some(x=> x.partNo === p)){ toast('その品番はすでにあります','error'); return; }
+  setPartName(p, n);
+  $('#newPartNo').value = ''; $('#newPartName').value = '';
+  renderMaster();
+  toast(`品番 ${p} を登録しました`,'success');
+}
+async function deletePartMaster(partNo){
+  if(partIsUsed(partNo)){ toast('使われている品番は消せません','error'); return; }
+  const ok = await confirmDialog('品番の削除', `${partNo} を品番マスターから消します。`, '削除する', true);
+  if(!ok) return;
+  const p = (store.parts||[]).find(x=> x.partNo === partNo);
+  store.parts = (store.parts||[]).filter(x=> x.partNo !== partNo);
+  if(p) delDoc('parts', p.id);
+  save(); renderMaster();
+  toast('削除しました');
 }
 /* ===== COILS（コイル在庫） ===== */
 function renderCoilSelect(){
@@ -4922,7 +5000,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.54';
+const APP_VERSION = '2026-06-28.55';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -5022,7 +5100,6 @@ function init(){
   renderStatus();
   renderMachineSettings();
   renderCoilSettings();
-  renderPartNames();
   renderAutoSettings();
   renderShutdownSettings();
   renderBackupNote();
