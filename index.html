@@ -1259,7 +1259,7 @@ const PLAN_DEMO_KEY = 'genbaPlanDemo_v1';
 // 予定タブの使い方：デモ（このパソコンの中だけ）／本番（全端末で共有）。設定タブで切り替える
 function isDemo(){
   const s = (store.settings||[]).find(x=> x.id==='app');
-  return s ? s.planDemo !== false : true;     // 既定はデモ
+  return s ? s.planDemo === true : false;     // 既定は本番（設定で明示的にデモにした時だけデモ）
 }
 function demoChip(){ return isDemo() ? '<span class="demo-chip">🧪 デモ</span>' : ''; }
 function setSetting(key, val){
@@ -1282,7 +1282,7 @@ function load(){
   if(!Array.isArray(store.settings)) store.settings = [];   // アプリの設定（予定のデモ／本番など）
   if(!Array.isArray(store.parts)) store.parts = [];         // 品番ごとの品名
   if(!Array.isArray(store.orders)) store.orders = [];       // 注文（予定タブ）
-  if(isDemo()){   // デモ中の注文は別の保存場所から読む
+  if(isDemo() && !(store.orders||[]).length){   // デモ中の注文は別の保存場所から読む（本番の注文があるときは触らない）
     try{ const s = localStorage.getItem(PLAN_DEMO_KEY); store.orders = s ? JSON.parse(s) : []; }catch(e){ store.orders = []; }
     if(!Array.isArray(store.orders)) store.orders = [];
   }
@@ -1469,7 +1469,11 @@ function applySnap(kind, snap){
     syncPush();           // 先に未送信ぶんをサーバーへ送り切る
     if(pruneOldRecords()){ try{ localStorage.setItem(KEY, storeJson()); }catch(e){} }  // その後で古い分を手放す
   }
-  if(kind==='settings'){ ensureOrdersListener(); applyPlanMode(); }   // 他の端末で本番に切り替えられた時
+  if(kind==='settings'){
+    ensureOrdersListener(); applyPlanMode();                          // 他の端末で本番に切り替えられた時
+    // デモ中にこの端末へ入れていた注文を、本番に切り替わったタイミングで送る
+    if(!isDemo() && (store.orders||[]).length) save();
+  }
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
   // 他の端末が操作したときだけ知らせる（自分の操作は先にローカル反映済みなので鳴らない）
@@ -4883,7 +4887,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.52';
+const APP_VERSION = '2026-06-28.53';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
