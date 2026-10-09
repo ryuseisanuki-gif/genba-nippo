@@ -1717,6 +1717,7 @@ function closeAllOpenStops(r, iso){ let n=0; openStops(r).forEach(s=>{ s.to = is
 // 個数を入れた日が「未入力」の印に残っていたら消す（古い版の取りこぼしを直す）
 function healPendingDates(){
   let n = 0;
+  store.records.forEach(r=>{ if(r.status==='done' && r.pendingCount){ r.pendingCount = false; n++; } });   // 終了済みに持ち越しの印は要らない
   store.records.forEach(r=>{
     if(!(r.pendingDates||[]).length || !(r.dailyCounts||[]).length) return;
     const before = r.pendingDates.length;
@@ -1757,6 +1758,19 @@ function healDuplicateActives(){
   });
   if(n) save();
   return n;
+}
+// 休止の日に作られてしまった空の自動記録を消す（休止を登録する前に作られたもの。停止・個数が入っている記録や、予定とつながった記録は消さない）
+function healShutdownAuto(){
+  if(!initialSyncDone) return 0;   // 休止期間を全端末から読み終わってから
+  const linked = new Set((store.orders||[]).map(o=> o.recId).filter(Boolean));
+  const drop = store.records.filter(r=> r.auto===true && !linked.has(r.id)
+    && !(r.stops||[]).length && !(r.dailyCounts||[]).length && !(recordTotalQty(r) > 0)
+    && isShutdown(new Date(r.startTime), r.machineId)).map(r=> r.id);
+  if(!drop.length) return 0;
+  store.records = store.records.filter(r=> !drop.includes(r.id));
+  drop.forEach(id=> delDoc('records', id));
+  save();
+  return drop.length;
 }
 function healOpenStops(){
   const nowIso = nowDate().toISOString();
@@ -2830,7 +2844,7 @@ function scheduleBoundaryTick(){
 function tickBoundaries(){
   const changed = processDayBoundaries();
   const brk = processBreaks();
-  const heal = healOpenStops() + healPendingDates() + healDuplicateActives();   // 閉じ忘れの停止・未入力の印・記録の二重を直す
+  const heal = healOpenStops() + healPendingDates() + healDuplicateActives() + healShutdownAuto();   // 閉じ忘れの停止・未入力の印・記録の二重・休止日の空の自動記録を直す
   syncPartsMaster();                // 新しく使われた品番を品番マスターに登録
   const auto = processAutoDaily();
   notifyLongStops();                // 再開の押し忘れを知らせる
@@ -5475,7 +5489,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.65';
+const APP_VERSION = '2026-06-28.66';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
