@@ -1807,7 +1807,7 @@ function renderPartHistory(){
   const cur = scan.partNo || '';
   sel.innerHTML = list.length
     ? '<option value="">（過去の品番から選ぶ）</option>' +
-      list.map(x=>{ const n = partNameOf(x.partNo); return `<option value="${esc(x.partNo)}">${esc(x.partNo)}${n?'　'+esc(n):''}　${fmtMD(x.at)}</option>`; }).join('')
+      list.map(x=>{ const n = partNameOf(x.partNo); return `<option value="${esc(x.partNo)}">${esc(x.partNo)}${n?'　'+esc(n):''}</option>`; }).join('')
     : `<option value="">${selectedMachineId ? 'この機械の過去の品番はまだありません' : '先に機械を選んでください'}</option>`;
   sel.value = [...sel.options].some(o=>o.value===cur) ? cur : '';
 }
@@ -4726,7 +4726,7 @@ function openOrderSheet(id){
   $('#osHistory').innerHTML = '<option value="">（過去の品番から選ぶ）</option>' +
     [...seen.entries()].sort((a,b)=> b[1].t - a[1].t).map(([p,x])=>{
       const n = partNameOf(p);
-      return `<option value="${esc(p)}">${esc(p)}${n?'　'+esc(n):''}${x.t ? '　' + esc(x.m) + ' ' + fmtMD(x.t) : ''}</option>`;
+      return `<option value="${esc(p)}">${esc(p)}${n?'　'+esc(n):''}${x.t && x.m ? '　' + esc(x.m) : ''}</option>`;
     }).join('');
   $('#osHistory').value = o && seen.has(o.partNo) ? o.partNo : '';
   $('#osPart').value = o ? o.partNo : '';
@@ -4883,7 +4883,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.51';
+const APP_VERSION = '2026-06-28.52';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
