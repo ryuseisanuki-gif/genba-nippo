@@ -792,6 +792,8 @@
   .od-del:active{background:var(--stop-bg);}
   .unreg-card{border:1.5px solid #ecd7a6;background:#fffdf7;}
   .rchip.warn:not(.sel) .n{color:var(--pause-d);opacity:1;font-weight:900;}
+  .rchip .n-red{color:var(--stop);font-weight:900;margin-left:6px;font-family:var(--mono);}
+  .rchip.sel .n-red{color:#ff9d92;}
   .unreg-card .mrow{border-color:#ecd7a6;}
   .unreg-card .mrow-ed + .od-del{margin-left:6px;}
   .ign-chip{display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border-radius:7px;padding:2px 4px 2px 8px;font-family:var(--mono);font-size:11.5px;margin:2px;}
@@ -983,7 +985,9 @@
     <button onclick="planDemoSample()">見本の注文を入れる</button>
     <button onclick="planDemoClear()">デモを全部消す</button>
   </div>
+  <div class="rec-chips" id="planViewChips"></div>
   <div class="plan-editbar" id="planEditBar"></div>
+  <div id="planMainView">
   <div class="day-nav">
     <button class="day-arrow" onclick="planMonthMove(-1)">◀</button>
     <div class="day-label" id="planLabel" onclick="planThisMonth()">—</div>
@@ -1007,8 +1011,9 @@
   </div>
   <div class="pool" id="planPool" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
   <div class="kakou-info" id="kakouInfo"></div>
-  <div id="planOverdue"></div>
   <div class="set-note">速さは、その機械でその品番を作った日の記録（動いていた時間あたりの個数）から計算します。記録が5日未満の品番は理論値（回転数÷何回転で1個）で、1日の稼働を90%として計算します。土日祝と休止日は数えません。納期の日までに作り終われば「間に合う」です。</div>
+  </div>
+  <div id="planOverdue" hidden></div>
 </section>
 
 <!-- ===== 品番マスター ===== -->
@@ -4544,6 +4549,7 @@ function renderPlan(){
   if(!$('#page-plan')) return;
   $('#planDemo').hidden = !isDemo();
   renderPlanEditBar();
+  renderPlanViewChips();
   if(planAutoDone()) save();   // 終わった作業の注文は完了に
   // 取り込んだ作業で、残りの数量・納期がまだの物（バーが細くて押しにくいので、ここからも入れられるように）
   const todo = store.orders.filter(o=> o.needsInput && !o.done && validOrder(o));
@@ -4815,11 +4821,23 @@ function renderKakouInfo(){
   const at = appSetting().kakouAt;
   el.innerHTML = `📄 加工指図：${at ? '最終更新 ' + fmtDT(at) : 'まだ取り込んでいません'}　<button class="linkbtn" onclick="kakouUpdate(true)">ファイルを選び直す</button>`;
 }
+/* 予定タブの「予定」「納期超過」切り替え（最初は予定） */
+let planView = 'plan';
+function overdueOrders(){ return store.orders.filter(o=> !o.done && o.bucket==='overdue' && validOrder(o)).sort((a,b)=> a.due < b.due ? -1 : 1); }
+function setPlanView(v){ planView = v; if(v==='plan') planScrollToday = true; renderPlan(); window.scrollTo(0,0); }
+function renderPlanViewChips(){
+  const n = overdueOrders().length;
+  $('#planViewChips').innerHTML =
+    `<button class="rchip${planView==='plan'?' sel':''}" onclick="setPlanView('plan')">予定</button>` +
+    `<button class="rchip${planView==='overdue'?' sel':''}" onclick="setPlanView('overdue')">納期超過<span class="n-red">${n}</span></button>`;
+  $('#planMainView').hidden = planView !== 'plan';
+  $('#planOverdue').hidden = planView !== 'overdue';
+}
 /* 納期超過の指図（プールに入れる・変更・削除を選ぶ） */
 function renderPlanOverdue(){
   const el = $('#planOverdue'); if(!el) return;
-  const list = store.orders.filter(o=> !o.done && o.bucket==='overdue' && validOrder(o)).sort((a,b)=> a.due < b.due ? -1 : 1);
-  if(!list.length){ el.innerHTML = ''; return; }
+  const list = overdueOrders();
+  if(!list.length){ el.innerHTML = '<div class="rec-empty-note">納期超過の指図はありません。<br>「📄 加工指図更新」で、納期から3か月以上すぎた指図がここに入ります。</div>'; return; }
   el.innerHTML = `<div class="pool-head"><span class="t">⏰ 納期超過の指図</span><span class="s">${list.length}件・納期から3か月以上すぎた加工指図${planEdit ? '' : '（操作は「✎ 予定を編集する」を押してから）'}</span></div>
     <div class="od-list">${list.map(o=>`<div class="od-row">
       <div class="od-main"><b>${esc(o.partNo)}</b>　<span>${esc(partNameOf(o.partNo) || o.partName || '')}</span>
@@ -5456,7 +5474,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.61';
+const APP_VERSION = '2026-06-28.62';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
