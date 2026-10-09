@@ -761,6 +761,10 @@
   .pool-head .t{font-size:15px;font-weight:800;color:var(--ink);}
   .pool-head .s{font-size:12px;color:var(--ink3);font-weight:600;}
   .pool-head .btn-add{margin-left:auto;padding:11px 16px;}
+  .plan-trash{margin-left:auto;padding:10px 16px;border:2px dashed var(--stop);border-radius:11px;background:var(--stop-bg);
+    color:var(--stop-d);font-size:12.5px;font-weight:800;white-space:nowrap;}
+  .plan-trash + .btn-add{margin-left:8px;}
+  .plan-trash.over{background:var(--stop);border-style:solid;color:#fff;}
   .pool{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;min-height:70px;border-radius:14px;transition:background .12s;}
   .pool.drop-ok{outline:2px dashed var(--line2);outline-offset:5px;}
   .pool.over{background:rgba(26,111,196,.06);outline-color:var(--blue);}
@@ -947,11 +951,12 @@
     <span><i class="ok"></i>納期に間に合う</span>
     <span><i class="late"></i>納期に遅れる</span>
     <span><i class="off"></i>休み（土日祝・休止）</span>
-    <span class="pc-only">🖱 ホイールで先の日付へ／カードを日付へドラッグで予定に入れる／バーをプールへドラッグで戻す</span>
+    <span class="pc-only">🖱 ホイールで先の日付へ／カードを日付へドラッグで予定に入れる／バーをプールへドラッグで戻す／🗑️へドラッグで削除</span>
   </div>
   <div class="pool-head">
     <span class="t">📥 プール</span>
     <span class="s" id="planPoolSub"></span>
+    <div class="plan-trash" id="planTrash" hidden ondragover="planTrashOver(event)" ondragleave="planTrashLeave(event)" ondrop="planTrashDrop(event)">🗑️ ここへドラッグで削除</div>
     <button class="btn-add" onclick="openOrderSheet()">＋ 注文を追加</button>
   </div>
   <div class="pool" id="planPool" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
@@ -4612,12 +4617,14 @@ function planDragStart(e, id, from){
   planDrag = { id, from, key:null, tip:'' };
   try{ e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; }catch(_){}
   if(from==='bar') $('#planPool').classList.add('drop-ok');
+  const tr = $('#planTrash'); if(tr) tr.hidden = false;   // ドラッグ中だけゴミ箱を出す
 }
 function planDragEnd(){
   planDrag = null;
   document.querySelectorAll('.g-track.over').forEach(x=>x.classList.remove('over'));
   document.querySelectorAll('.g-mark').forEach(x=>x.remove());
   $('#planPool').classList.remove('drop-ok','over');
+  const tr = $('#planTrash'); if(tr){ tr.hidden = true; tr.classList.remove('over'); }
   planHideTip();
   if(planDirty){ planDirty = false; renderPlan(); }
 }
@@ -4681,6 +4688,34 @@ function planDropTrack(e, machineId){
   if(!o) return;
   o.machineId = machineId; o.start = numKey(n); o.startFrac = 0; o.seq = nowMs();
   save(); renderPlan(); planToastPlaced(o);
+}
+/* ゴミ箱へドラッグして注文を消す */
+function planTrashOver(e){
+  if(!planDrag) return;
+  e.preventDefault();
+  try{ e.dataTransfer.dropEffect = 'move'; }catch(_){}
+  $('#planTrash').classList.add('over');
+  planHideTip();
+}
+function planTrashLeave(e){
+  if(e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return;
+  $('#planTrash').classList.remove('over');
+}
+async function planTrashDrop(e){
+  if(!planDrag) return;
+  e.preventDefault();
+  const id = planDrag.id;
+  planDragEnd();
+  const o = store.orders.find(x=> x.id===id); if(!o) return;
+  const ok = await confirmDialog('注文の削除',
+    `${o.partNo}（${o.qty.toLocaleString()}個・納期 ${String(o.due||'').replace(/-/g,'/')}）を削除します。` +
+    (o.startedAt ? '\nこの予定は作業中です。削除しても、動いている日報の記録は残ります。' : ''),
+    '削除する', true);
+  if(!ok){ renderPlan(); return; }
+  store.orders = store.orders.filter(x=> x.id!==id);
+  if(!isDemo()) delDoc('orders', id);
+  save(); renderPlan();
+  toast('注文を削除しました');
 }
 function planPoolOver(e){
   if(!planDrag || planDrag.from!=='bar') return;
@@ -4887,7 +4922,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.53';
+const APP_VERSION = '2026-06-28.54';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
