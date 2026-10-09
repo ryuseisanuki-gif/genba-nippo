@@ -270,6 +270,14 @@
   .np-row .q{font-family:var(--mono);flex-shrink:0;}
   .np-row .d{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink3);flex-shrink:0;}
   .np-row .lt{color:var(--stop-d);font-weight:800;flex-shrink:0;}
+  .np-item{padding:7px 0;border-top:1px dashed #d7ecdd;}
+  .np-item:first-of-type{border-top:none;padding-top:0;}
+  .np-ops{display:flex;gap:6px;margin-top:6px;}
+  .np-mv{padding:8px 11px;border-radius:9px;border:1px solid #bfe3cb;background:#fff;color:var(--run-d);font-size:12px;font-weight:800;font-family:var(--sans);}
+  .np-mv:disabled{opacity:.35;}
+  .np-mv:active{background:#eaf6ee;}
+  .np-go{margin-left:auto;padding:8px 13px;border-radius:9px;border:none;background:var(--ink);color:#fff;font-size:12px;font-weight:800;font-family:var(--sans);}
+  .np-go:active{background:#0d1620;}
 
   /* ── Records ── */
   .rec-bar{display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;}
@@ -4528,8 +4536,15 @@ function planNextCard(list){
   const nx = list[0], o = nx.o, nowP = planTodayPos(o.machineId);
   const early = nx.s.d > nowP.d;
   const rest = list.slice(1);
-  const restHtml = rest.length ? `<div class="np-rest"><div class="np-rest-h">このあとの予定</div>${
-    rest.map((x,i)=>`<div class="np-row"><span class="n">${i+2}</span><b>${esc(x.o.partNo)}</b><span class="q">${x.o.qty.toLocaleString()}個</span><span class="d">${numMD(x.s.d)}〜${numMD(x.last)}</span>${x.late?'<span class="lt">⚠遅れ</span>':''}</div>`).join('')
+  const restHtml = rest.length ? `<div class="np-rest"><div class="np-rest-h">このあとの予定（順番を入れ替えられます）</div>${
+    rest.map((x,i)=>`<div class="np-item">
+      <div class="np-row"><span class="n">${i+2}</span><b>${esc(x.o.partNo)}</b><span class="q">${x.o.qty.toLocaleString()}個</span><span class="d">${numMD(x.s.d)}〜${numMD(x.last)}</span>${x.late?'<span class="lt">⚠遅れ</span>':''}</div>
+      <div class="np-ops">
+        <button class="np-mv" onclick="planMoveOrder('${x.o.id}',-1)">▲ 上へ</button>
+        <button class="np-mv"${i===rest.length-1?' disabled':''} onclick="planMoveOrder('${x.o.id}',1)">▼ 下へ</button>
+        <button class="np-go" onclick="startFromOrderOutOfTurn('${x.o.id}')">▶ これを始める</button>
+      </div>
+    </div>`).join('')
   }</div>` : '';
   return `<div class="next-plan">
     <div class="np-h">📅 次の予定${demoChip()}</div>
@@ -4539,6 +4554,36 @@ function planNextCard(list){
     ${early ? '<div class="np-note">予定より早く始めると、予定表が前にずれます</div>' : ''}
     ${restHtml}
   </div>`;
+}
+// スマホからも順番を入れ替えられるようにする（上の予定と希望の開始日・並び順を入れ替える）
+function planMoveOrder(id, dir){
+  const o = store.orders.find(x=> x.id===id); if(!o) return;
+  planWorkMemo = {};
+  const lay = planLayout(o.machineId).filter(x=> !x.o.startedAt);
+  const i = lay.findIndex(x=> x.o.id===id), j = i + dir;
+  if(i < 0 || j < 0 || j >= lay.length) return;
+  const a = lay[i].o, b = lay[j].o;
+  const tmp = { start:a.start, startFrac:a.startFrac||0, seq:a.seq||0 };
+  a.start = b.start; a.startFrac = b.startFrac||0; a.seq = b.seq||0;
+  b.start = tmp.start; b.startFrac = tmp.startFrac; b.seq = tmp.seq;
+  const first = dir < 0 ? a : b, second = dir < 0 ? b : a;
+  if(first.start === second.start && (first.startFrac||0) === (second.startFrac||0)){
+    first.seq = Math.max(first.seq||0, second.seq||0) + 1;   // 同じ日なら新しい方が前のルールに合わせる
+  }
+  save(); refreshActiveViews();
+  toast(`${a.partNo} の順番を${dir<0?'上':'下'}へ移しました`, 'success');
+}
+// 次の予定より先のものを始めるときは確認する
+async function startFromOrderOutOfTurn(id){
+  const o = store.orders.find(x=> x.id===id); if(!o) return;
+  const nx = nextOrderFor(o.machineId);
+  if(nx && nx.o.id !== id){
+    const ok = await confirmDialog('予定と違う順番ですが大丈夫ですか？',
+      `次の予定は「${nx.o.partNo}」（${nx.o.qty.toLocaleString()}個・納期 ${numMDW(dayNum(nx.o.due))}）です。先に「${o.partNo}」（${o.qty.toLocaleString()}個・納期 ${numMDW(dayNum(o.due))}）を始めますか？`,
+      'これを始める');
+    if(!ok) return;
+  }
+  startFromOrder(id);
 }
 // 「この予定で開始」：品番・コイル・回転数を入れて、そのまま開始する
 function startFromOrder(id){
@@ -4838,7 +4883,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.50';
+const APP_VERSION = '2026-06-28.51';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
