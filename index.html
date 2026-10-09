@@ -4905,9 +4905,13 @@ function unregRegister(partNo){
   const o0 = store.orders.find(o=> o.partNo===partNo && o.bucket==='unreg');
   setPartName(partNo, (o0 && o0.partName) || '');    // 品番マスターに登録（品名は加工指図のもの）
   const cut = kakouOverdueCut();
-  store.orders.forEach(o=>{ if(o.partNo===partNo && o.bucket==='unreg'){ if(o.due < cut) o.bucket = 'overdue'; else delete o.bucket; } });
+  let toPool = 0, toOver = 0;   // 行き先ごとの件数（納期から3か月以上すぎた指図は納期超過へ）
+  store.orders.forEach(o=>{
+    if(o.partNo===partNo && o.bucket==='unreg'){ if(o.due < cut){ o.bucket = 'overdue'; toOver++; } else { delete o.bucket; toPool++; } }
+  });
   save(); renderMaster();
-  toast(`${partNo} を品番マスターに登録し、指図をプールに入れました`,'success');
+  const where = [toPool ? `プールに${toPool}件` : '', toOver ? `予定タブの「納期超過」に${toOver}件` : ''].filter(Boolean).join('・');
+  toast(`${partNo} を品番マスターに登録しました（${where || '指図はありません'}）`,'success');
 }
 async function unregIgnore(partNo){
   const ok = await confirmDialog('品番を除外', `${partNo} の指図を取り込まないようにします（プレスの仕事でない品番など）。あとで「戻す」で元に戻せます。`, '除外する', true);
@@ -5489,7 +5493,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.66';
+const APP_VERSION = '2026-06-28.67';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
