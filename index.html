@@ -772,6 +772,14 @@
   .pool-head .t{font-size:15px;font-weight:800;color:var(--ink);}
   .pool-head .s{font-size:12px;color:var(--ink3);font-weight:600;}
   .pool-head .btn-add{margin-left:auto;padding:11px 16px;}
+  .plan-editbar{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;border-radius:11px;padding:10px 13px;margin-bottom:11px;font-size:12.5px;font-weight:700;line-height:1.55;}
+  .plan-editbar span{flex:1;min-width:240px;}
+  .plan-editbar.view{background:var(--surface);border:1px solid var(--line);color:var(--ink2);}
+  .plan-editbar.edit{background:#fff7f0;border:2px solid var(--orange);color:var(--orange-d);}
+  .plan-editbar .ver-btn{padding:10px 16px;}
+  .g-bar.locked{cursor:default;}
+  .tab.editing{color:var(--orange);}
+  .tab.editing .ic::after{content:'●';color:var(--orange);font-size:9px;vertical-align:top;margin-left:2px;}
   .plan-trash{margin-left:auto;padding:10px 16px;border:2px dashed var(--stop);border-radius:11px;background:var(--stop-bg);
     color:var(--stop-d);font-size:12.5px;font-weight:800;white-space:nowrap;}
   .plan-trash + .btn-add{margin-left:8px;}
@@ -951,6 +959,7 @@
     <button onclick="planDemoSample()">見本の注文を入れる</button>
     <button onclick="planDemoClear()">デモを全部消す</button>
   </div>
+  <div class="plan-editbar" id="planEditBar"></div>
   <div class="day-nav">
     <button class="day-arrow" onclick="planMonthMove(-1)">◀</button>
     <div class="day-label" id="planLabel" onclick="planThisMonth()">—</div>
@@ -969,7 +978,7 @@
     <span class="t">📥 プール</span>
     <span class="s" id="planPoolSub"></span>
     <div class="plan-trash" id="planTrash" hidden ondragover="planTrashOver(event)" ondragleave="planTrashLeave(event)" ondrop="planTrashDrop(event)">🗑️ ここへドラッグで削除</div>
-    <button class="btn-add" onclick="openOrderSheet()">＋ 注文を追加</button>
+    <button class="btn-add" id="planAddBtn" onclick="openOrderSheet()">＋ 注文を追加</button>
   </div>
   <div class="pool" id="planPool" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
   <div class="set-note">速さは、その機械でその品番を作った日の記録（動いていた時間あたりの個数）から計算します。記録が5日未満の品番は理論値（回転数÷何回転で1個）で、1日の稼働を90%として計算します。土日祝と休止日は数えません。納期の日までに作り終われば「間に合う」です。</div>
@@ -1348,7 +1357,19 @@ function load(){
   // 既定機械の自動生成は廃止（削除しても復活しないように）。機械は設定タブで登録する。
 }
 // 日報の保存にはデモの注文を混ぜない（本番に切り替えた時に勝手に送られないように）
-function storeJson(){ return isDemo() ? JSON.stringify(Object.assign({}, store, { orders: undefined })) : JSON.stringify(store); }
+// 予定の編集中（確定前）の注文は端末に保存しない（再読み込みしたら確定前の内容は消えて、確定済みに戻る）
+function storeJson(){ return (isDemo() || planEdit) ? JSON.stringify(Object.assign({}, store, { orders: undefined })) : JSON.stringify(store); }
+/* ===== 予定の編集モード（確定するまで他の端末に出さない） ===== */
+let planEdit = false;                 // 編集中か
+const planDraftDel = new Set();       // 編集中に消した注文（確定時にサーバーから消す）
+const ORDER_WORK_FIELDS = ['startedAt','recId','done','doneAt','doneQty'];   // 作業の進み（編集中でも他端末の変更を取り込む）
+function planDelOrderDoc(id){ if(planEdit) planDraftDel.add(id); else delDoc('orders', id); }
+// 編集中でも、作業の開始・完了はすぐサーバーへ送る（予定の並びは確定まで送らない）
+function pushOrderWorkNow(o){
+  if(!planEdit || isDemo() || !fbReady || !db || !o) return;
+  const w = {}; ORDER_WORK_FIELDS.forEach(k=>{ if(k in o) w[k] = o[k]; });
+  db.collection('orders').doc(o.id).set(w, { merge:true }).catch(e=>console.warn('order work push', e));
+}
 function save(){
   dataVer++;
   try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
@@ -1497,6 +1518,21 @@ function ensureOrdersListener(){
   ordersUnsub = db.collection('orders').onSnapshot(s=>applySnap('orders', s), e=>console.warn('orders listen', e));
 }
 function applySnap(kind, snap){
+  if(kind==='orders' && planEdit){
+    // 編集中：他の端末からの変更は、作業の進み（開始・完了）と新しい注文だけ取り込む。並びは編集中の内容を残す
+    snap.docChanges().forEach(ch=>{
+      const id = ch.doc.id, data = ch.doc.data();
+      if(ch.type==='removed'){ delete lastSynced['orders/'+id]; const i = store.orders.findIndex(x=> x.id===id); if(i>=0) store.orders.splice(i,1); return; }
+      lastSynced['orders/'+id] = JSON.stringify(data);
+      if(planDraftDel.has(id)) return;
+      const o = store.orders.find(x=> x.id===id);
+      if(!o){ store.orders.push(data); return; }
+      ORDER_WORK_FIELDS.forEach(k=>{ if(k in data) o[k] = data[k]; else delete o[k]; });
+    });
+    firstSnap.orders = true; dataVer++;
+    refreshActiveViews();
+    return;
+  }
   const beforeKey = (kind==='records' && initialSyncDone) ? machineStateKey(selectedMachineId) : null;
   const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : kind==='workdays' ? store.workdays : kind==='orders' ? store.orders : kind==='parts' ? store.parts : kind==='settings' ? store.settings : store.records;
   snap.docChanges().forEach(ch=>{
@@ -1544,7 +1580,7 @@ function syncPush(){
   (store.workdays||[]).forEach(w=> cur['workdays/'+w.id] = w);
   (store.parts||[]).forEach(p=> cur['parts/'+p.id] = p);
   (store.settings||[]).forEach(s=> cur['settings/'+s.id] = s);
-  if(!isDemo()) (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);   // デモ中は送らない
+  if(!isDemo() && !planEdit) (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);   // デモ中・予定の編集中（確定前）は送らない
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -4462,6 +4498,7 @@ function renderPlan(){
   if(planDrag){ planDirty = true; return; }   // ドラッグ中に描き直すとドラッグが切れる
   if(!$('#page-plan')) return;
   $('#planDemo').hidden = !isDemo();
+  renderPlanEditBar();
   if(planAutoDone()) save();   // 終わった作業の注文は完了に
   // 取り込んだ作業で、残りの数量・納期がまだの物（バーが細くて押しにくいので、ここからも入れられるように）
   const todo = store.orders.filter(o=> o.needsInput && !o.done && validOrder(o));
@@ -4527,8 +4564,8 @@ function planBarHtml(x, todayN){
   const o = x.o, cls = (o.needsInput ? 'tbd' : !x.c.ok ? 'unk' : x.late ? 'late' : 'ok') + (o.startedAt ? ' running' : '');
   const tip = (o.needsInput ? '【残りの数量・納期が未入力（仮に1日分で表示）】\n' : '') + (x.over ? '【見込みを過ぎて作業中】\n' : '') + `${o.partNo}　${o.qty.toLocaleString()}個\n${numMDW(x.s.d)} 〜 ${numMDW(x.last)}\n納期 ${numMDW(dayNum(o.due))}${x.late?'（遅れる）':''}\n` +
     (x.c.ok ? `見込み${planFmtDays(x.c.need)}日（${x.c.sp.basis}）` : '速さ不明（1日で仮置き）');
-  const drag = canDrag ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','bar')" ondragend="planDragEnd()"` : '';
-  return `<div class="g-bar ${cls}${x.last < todayN ? ' past' : ''}" style="left:${l/planN*100}%;width:${(r-l)/planN*100}%" title="${esc(tip)}" onclick="openOrderSheet('${o.id}')"${drag}>` +
+  const drag = (canDrag && planEdit) ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','bar')" ondragend="planDragEnd()"` : '';
+  return `<div class="g-bar ${cls}${x.last < todayN ? ' past' : ''}${planEdit?'':' locked'}" style="left:${l/planN*100}%;width:${(r-l)/planN*100}%" title="${esc(tip)}" onclick="${planEdit ? `openOrderSheet('${o.id}')` : 'planNeedEdit()'}"${drag}>` +
     `<b>${o.startedAt?'▶ ':''}${esc(o.partNo)}</b>` +
     (o.needsInput ? '<span>数量・納期を入力</span>'
       : `<span>${o.qty.toLocaleString()}個</span><small>${x.late?'⚠遅れ ':''}納期${numMD(dayNum(o.due))}</small>`) + '</div>';
@@ -4561,7 +4598,7 @@ function planCardHtml(o, fit, machineId){
       </div>
       <div class="oc-dl">開始期限 <b>${numMDW(fit.latest.d)}</b> まで</div>`
     : `<div class="oc-dl">この品番の速さが分かりません。<br>「編集」で回転数を入れると計算できます。</div>`;
-  const drag = canDrag ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','pool')" ondragend="planDragEnd()"` : '';
+  const drag = (canDrag && planEdit) ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','pool')" ondragend="planDragEnd()"` : '';
   const pname = o.partName || partNameOf(o.partNo);
   return `<div class="oc st-${fit.st}"${drag}>
     <div class="oc-top"><span class="oc-part">${esc(o.partNo)}</span><span class="oc-basis">${c.ok ? esc(c.sp.basis) : ''}</span></div>
@@ -4569,10 +4606,55 @@ function planCardHtml(o, fit, machineId){
     <div class="oc-sub">${o.qty.toLocaleString()}個　納期 <b>${numMDW(dayNum(o.due))}</b></div>
     ${body}
     <span class="opill ${fit.st}">${planStLabel(fit)}</span>${alt}
-    <div class="oc-btns"><button class="oc-go" onclick="planPut('${o.id}')">${esc(machineId)}の予定に入れる</button><button class="oc-ed" onclick="openOrderSheet('${o.id}')">編集</button></div>
+    ${planEdit ? `<div class="oc-btns"><button class="oc-go" onclick="planPut('${o.id}')">${esc(machineId)}の予定に入れる</button><button class="oc-ed" onclick="openOrderSheet('${o.id}')">編集</button></div>` : ''}
   </div>`;
 }
 function setPlanMachine(id){ planMachine = id; renderPlan(); }
+/* 編集モード：ふだんは見るだけ。「編集する」→ 動かす → 「確定」で全端末に反映 */
+function renderPlanEditBar(){
+  const bar = $('#planEditBar'); if(!bar) return;
+  bar.className = 'plan-editbar ' + (planEdit ? 'edit' : 'view');
+  bar.innerHTML = planEdit
+    ? `<span>✎ <b>編集中</b>：変更はまだ他の端末やスマホに出ません。終わったら「確定」を押してください。</span>
+       <button class="btn-out" onclick="planCancelEdit()">✕ 取り消す</button>
+       <button class="ver-btn" onclick="planCommitEdit()">✓ 確定（全端末に反映）</button>`
+    : `<span>予定表は見るだけです。並べ替え・追加・削除をするときは「編集する」を押してください。</span>
+       <button class="ver-btn" onclick="planStartEdit()">✎ 予定を編集する</button>`;
+  const add = $('#planAddBtn'); if(add) add.hidden = !planEdit;
+  const tab = document.querySelector('.tab[data-tab=plan]');
+  if(tab) tab.classList.toggle('editing', planEdit);
+}
+function planNeedEdit(){ toast('変更するときは上の「✎ 予定を編集する」を押してください'); }
+function planStartEdit(){
+  planEdit = true; planDraftDel.clear();
+  renderPlan();
+  toast('編集モードにしました。終わったら「確定」を押してください');
+}
+function planCommitEdit(){
+  planEdit = false;
+  planDraftDel.forEach(id=> delDoc('orders', id)); planDraftDel.clear();
+  save();                                  // ここで変更をまとめて全端末へ送る
+  renderPlan(); refreshActiveViews();
+  toast('予定を確定しました。全端末に反映されます','success');
+}
+async function planCancelEdit(){
+  const ok = await confirmDialog('編集を取り消す', '確定していない変更をすべて元に戻します。よろしいですか？', '取り消す', true);
+  if(!ok) return;
+  planEdit = false; planDraftDel.clear();
+  if(!isDemo() && fbReady && db){
+    try{   // 確定済みの内容をサーバーから取り直す
+      const snap = await db.collection('orders').get();
+      store.orders = snap.docs.map(d=> d.data());
+      snap.docs.forEach(d=>{ lastSynced['orders/'+d.id] = JSON.stringify(d.data()); });
+    }catch(e){ console.warn('reload orders', e); toast('元に戻せませんでした（通信を確認してください）','error'); }
+  } else if(isDemo()){
+    try{ const s = localStorage.getItem(PLAN_DEMO_KEY); store.orders = s ? JSON.parse(s) : []; }catch(e){}
+  }
+  dataVer++; save(); renderPlan(); refreshActiveViews();
+  toast('変更を取り消しました');
+}
+// 編集中に画面を閉じようとしたら止める（確定していない変更が消えるため）
+window.addEventListener('beforeunload', e=>{ if(planEdit){ e.preventDefault(); e.returnValue = ''; } });
 // ◀▶：前・次の月の1日へスクロール（表示の範囲が足りなければ広げる）
 function planMonthMove(k){
   const t = new Date(planMonth.getFullYear(), planMonth.getMonth() + k, 1), now = nowDate();
@@ -4653,6 +4735,7 @@ function planAutoDone(){
       if((cur.partNo||'').trim() === o.partNo){ o.recId = cur.id; n++; return; }
     }
     o.done = true; o.doneAt = r.endTime || nowDate().toISOString(); o.doneQty = recordTotalQty(r); n++;
+    pushOrderWorkNow(o);   // 予定の編集中でも、完了はすぐ全端末へ
   });
   return n;
 }
@@ -4703,6 +4786,7 @@ function planLinkStart(rec, orderId){
   if(!o) return null;
   const earlier = planPullForward(o, m);
   o.startedAt = rec.startTime; o.recId = rec.id;
+  pushOrderWorkNow(o);   // 予定の編集中でも、作業の開始はすぐ全端末へ
   if(!isDemo()) rec.orderId = o.id;   // デモ中は日報の記録に印を付けない
   return { o, earlier };
 }
@@ -4879,7 +4963,7 @@ async function planTrashDrop(e){
     '削除する', true);
   if(!ok){ renderPlan(); return; }
   store.orders = store.orders.filter(x=> x.id!==id);
-  if(!isDemo()) delDoc('orders', id);
+  if(!isDemo()) planDelOrderDoc(id);
   save(); renderPlan();
   toast('注文を削除しました');
 }
@@ -5058,7 +5142,7 @@ async function osDelete(){
   const ok = await confirmDialog('注文の削除', `${o.partNo}（${o.qty.toLocaleString()}個）の注文を削除します。`, '削除する', true);
   if(!ok) return;
   store.orders = store.orders.filter(x=>x.id!==o.id);
-  if(!isDemo()) delDoc('orders', o.id);
+  if(!isDemo()) planDelOrderDoc(o.id);
   save(); renderPlan(); toast('削除しました');
 }
 
@@ -5089,7 +5173,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.58';
+const APP_VERSION = '2026-06-28.59';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -5147,6 +5231,7 @@ let lastInteraction = 0, autoUpdTimer = null;
 ['pointerdown','keydown','touchstart'].forEach(ev=>
   document.addEventListener(ev, ()=>{ lastInteraction = /*RAW*/Date.now(); }, { passive:true, capture:true }));
 function autoUpdateAllowed(){
+  if(planEdit) return false;                                                   // 予定を編集中（確定前）は読み直さない
   // 同じ版で何度も読み直すのを防ぐ（キャッシュで古いHTMLが返る場合の空回り対策）
   try{ const t = parseInt(localStorage.getItem(AUTO_UPD_KEY) || '0'); if(/*RAW*/Date.now() - t < 600000) return false; }catch(e){}
   if(document.querySelector('.ov.active')) return false;                       // 入力シートが開いている
