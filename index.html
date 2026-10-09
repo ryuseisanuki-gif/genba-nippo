@@ -582,9 +582,6 @@
   .mrow-none{color:var(--ink3);font-weight:600;font-size:13px;}
   .mrow-ed{margin-left:auto;padding:7px 13px;border-radius:9px;border:1.5px solid var(--orange);background:#fff7f0;color:var(--orange-d);font-size:12.5px;font-weight:800;font-family:var(--sans);}
   .mrow-ed:active{background:#fde9d6;}
-  .mrow.editing{border-color:#f0c9a3;}
-  #masterEditBtn{margin-bottom:10px;}
-  #masterEditBtn.on{background:var(--orange);border-color:var(--orange);color:#fff;}
   .mset .x:active{color:var(--stop);}
   .add-row{display:grid;grid-template-columns:1fr 1.3fr auto;gap:8px;margin-top:10px;}
   .add-row input{
@@ -982,15 +979,14 @@
 <section class="page" id="page-master">
   <div class="card set-card">
     <h3>🏷️ 品番マスター <span id="masterCount" class="step-hint"></span></h3>
-    <button id="masterEditBtn" class="btn-out" onclick="toggleMasterEdit()">✎ 編集モードにする</button>
-    <div id="masterAddBox" hidden>
+    <div id="masterAddBox">
       <div class="add-row">
         <input type="text" id="newPartNo" class="mi" placeholder="品番" autocomplete="off">
         <input type="text" id="newPartName" placeholder="品名（任意）" autocomplete="off">
         <button class="btn-add" onclick="addPartMaster()">追加</button>
       </div>
     </div>
-    <div class="set-note">作業や注文で使った品番は自動でここに登録されます。品名を直したり品番を追加・削除するときは「編集モード」にしてください（全端末で共有）。</div>
+    <div class="set-note">作業や注文で使った品番は自動でここに登録されます。品名の変更や削除は、各品番の「✎ 編集」から行います（全端末で共有）。</div>
     <input type="text" id="masterSearch" class="rec-filter" style="width:100%;margin-top:10px" placeholder="🔍 品番・品名・機械（P-6など）で絞り込み" oninput="masterFilter=this.value; renderMaster()">
     <div class="rec-chips" id="masterMachChips" style="margin:10px 0 0"></div>
   </div>
@@ -3830,13 +3826,9 @@ function renderMaster(){
   const all = allPartNos().length;
   $('#masterCount').textContent = (q || masterMachine) ? `${list.length} / ${all}件` : `${all}件`;
   if(!list.length){ el.innerHTML = '<div class="rec-empty-note">該当する品番がありません</div>'; return; }
-  // 編集モードの切り替え表示
-  $('#masterEditBtn').textContent = masterEdit ? '✓ 編集モードを終える' : '✎ 編集モードにする';
-  $('#masterEditBtn').classList.toggle('on', masterEdit);
-  $('#masterAddBox').hidden = !masterEdit;
   el.innerHTML = list.map(x=>{
     const ms = partMachines(x.partNo), nm = partNameOf(x.partNo);
-    return `<div class="mrow${masterEdit?' editing':''}">
+    return `<div class="mrow">
       <div class="mrow-top">
         <span class="mrow-id">${esc(x.partNo)}</span>
         ${ms.length ? `<span class="mrow-m">${ms.map(esc).join('・')}</span>` : '<span class="mrow-new">未使用</span>'}
@@ -3846,9 +3838,8 @@ function renderMaster(){
     </div>`;
   }).join('');
 }
-/* 編集モード：これをオンにしないと品番マスターは書き換えられない */
-let masterEdit = false;
-function toggleMasterEdit(){ masterEdit = !masterEdit; renderMaster(); }
+/* 品名の変更・削除は各品番の「編集」から行う（一覧では直接書き換えない） */
+const masterEdit = true;
 // 削除した品番（記録で使っているもの）は一覧から隠す
 function partHidden(partNo){ const p = (store.parts||[]).find(x=> x.partNo===partNo); return !!(p && p.hidden); }
 let editPartNo = null;
@@ -5098,7 +5089,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.57';
+const APP_VERSION = '2026-06-28.58';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
