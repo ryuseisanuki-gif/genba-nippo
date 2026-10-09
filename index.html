@@ -4776,40 +4776,66 @@ function kakouImport(text){
   save();
   return st;
 }
+// うまくいかなかった時の中身を残す（画面に出すのと、サーバーにも残して原因を調べられるように）
+function kakouLogError(step, e){
+  const msg = e ? `${e.name||'Error'}: ${e.message||e}` : String(step);
+  try{ setSetting('kakouLastError', { at: nowIso(), step, msg, ua: navigator.userAgent.slice(0, 160), ver: APP_VERSION }); }catch(_){}
+  return msg;
+}
 async function kakouUpdate(pickNew){
-  let file = null;
+  let file = null, step = 'start';
   try{
     if(window.showOpenFilePicker){
+      step = 'idb';
       let h = pickNew ? null : await kakouIdb('get').catch(()=> null);
       if(h){
+        step = 'permission';
         let perm = await h.queryPermission({ mode:'read' });
         if(perm !== 'granted') perm = await h.requestPermission({ mode:'read' });
         if(perm !== 'granted') h = null;
       }
       if(!h){
         const ok = await confirmDialog('加工指図のファイルを選ぶ',
-          `次に開く画面で、このファイルを選んでください。\n${KAKOU_PATH}\n\n場所（フォルダ）はコピーしてあるので、画面上のアドレス欄に貼り付けると早いです。一度選べば、次からはボタンを押すだけで読み込みます。`, 'ファイルを選ぶ');
+          `次に開く画面で、このファイルを選んでください。\n${KAKOU_PATH}\n\n場所（フォルダ）はコピーしてあるので、画面上のアドレス欄に貼り付けると早いです。一度選べば、次からはボタンを押すだけで読み込みます。\n※ファイルを予定タブへドラッグ＆ドロップしても取り込めます。`, 'ファイルを選ぶ');
         if(!ok) return;
         try{ await navigator.clipboard.writeText(KAKOU_PATH.replace(/\\[^\\]+$/, '')); }catch(e){}
+        step = 'picker';
         [h] = await window.showOpenFilePicker({ multiple:false, types:[{ description:'加工指図（CSV）', accept:{ 'text/csv':['.csv'] } }] });
         await kakouIdb('put', h).catch(()=>{});
       }
+      step = 'getFile';
       file = await h.getFile();
     } else {
+      step = 'input';
       file = await pickFileByInput();
     }
   }catch(e){
     if(e && e.name==='AbortError') return;
-    console.warn('kakou file', e);
-    toast('ファイルを読み込めませんでした。「ファイルを選び直す」から選んでください','error');
-    return;
+    console.warn('kakou file', step, e);
+    const msg = kakouLogError(step, e);
+    // 別の方法（ふつうのファイル選択）で選び直す
+    const ok = await confirmDialog('ファイルを読めませんでした',
+      `（${step}）${msg}\n\n別の方法でファイルを選びます。開いた画面で「加工指図残.csv」を選んでください。\n${KAKOU_PATH}`, 'ファイルを選ぶ');
+    if(!ok) return;
+    file = await pickFileByInput();
   }
   if(!file) return;
+  await kakouImportFile(file);
+}
+// ファイルを読み込んで取り込む（ボタン・ドラッグ＆ドロップ共通）
+async function kakouImportFile(file){
   toast('加工指図を読み込んでいます…');
-  let st;
-  try{ st = kakouImport(await readCsvText(file)); }
-  catch(e){ console.warn('kakou import', e); toast('読み込みに失敗しました（CSVの形が違うかもしれません）','error'); return; }
-  if(st.error){ toast(st.error,'error'); return; }
+  let st, text;
+  try{ text = await readCsvText(file); }
+  catch(e){
+    console.warn('kakou read', e);
+    const msg = kakouLogError('read', e);
+    await confirmDialog('ファイルを読めませんでした', `${msg}\n\nファイルが他のパソコンで開かれている・書き換え中の可能性があります。少し待ってからもう一度押してください。`, 'OK');
+    return;
+  }
+  try{ st = kakouImport(text); }
+  catch(e){ console.warn('kakou import', e); kakouLogError('parse', e); toast('読み込みに失敗しました（CSVの形が違うかもしれません）','error'); return; }
+  if(st.error){ kakouLogError('parse', { name:'CSV', message: st.error }); toast(st.error,'error'); return; }
   renderPlan();
   if($('#page-master').classList.contains('active')) renderMaster();
   await confirmDialog('加工指図を更新しました',
@@ -4818,10 +4844,23 @@ async function kakouUpdate(pickNew){
     `内容が変わった指図：${st.upd}件\n完了にした指図：${st.done}件` + (st.skip ? `\n除外中の品番で入れなかった指図：${st.skip}件` : '') +
     (st.unreg ? '\n\n未登録の品番は「🏷️ 品番」タブで登録するとプールに入ります。' : ''), 'OK');
 }
+// CSVファイルを予定タブへドラッグ＆ドロップしても取り込めるようにする
+document.addEventListener('dragover', e=>{
+  if(!$('#page-plan') || !$('#page-plan').classList.contains('active') || planDrag) return;
+  if(e.dataTransfer && [...(e.dataTransfer.types||[])].includes('Files')){ e.preventDefault(); try{ e.dataTransfer.dropEffect = 'copy'; }catch(_){} }
+});
+document.addEventListener('drop', async e=>{
+  if(!$('#page-plan') || !$('#page-plan').classList.contains('active') || planDrag) return;
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if(!f) return;
+  e.preventDefault();
+  if(!/\.csv$/i.test(f.name)){ toast('CSVファイル（加工指図残.csv）をドロップしてください','error'); return; }
+  await kakouImportFile(f);
+});
 function renderKakouInfo(){
   const el = $('#kakouInfo'); if(!el) return;
   const at = appSetting().kakouAt;
-  el.innerHTML = `📄 加工指図：${at ? '最終更新 ' + fmtDT(at) : 'まだ取り込んでいません'}　<button class="linkbtn" onclick="kakouUpdate(true)">ファイルを選び直す</button>`;
+  el.innerHTML = `📄 加工指図：${at ? '最終更新 ' + fmtDT(at) : 'まだ取り込んでいません'}　<button class="linkbtn" onclick="kakouUpdate(true)">ファイルを選び直す</button>　<span>（CSVをこの画面へドラッグ＆ドロップしても取り込めます）</span>`;
 }
 /* 予定タブの「予定」「納期超過」切り替え（最初は予定） */
 let planView = 'plan';
@@ -5476,7 +5515,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.63';
+const APP_VERSION = '2026-06-28.64';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
