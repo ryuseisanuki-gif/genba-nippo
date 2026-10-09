@@ -261,6 +261,15 @@
   .next-plan .np-sub b{color:var(--ink);}
   .next-plan .np-late{color:var(--stop-d);font-weight:800;}
   .next-plan .np-note{font-size:11.5px;color:var(--ink3);text-align:center;margin-top:8px;font-weight:600;}
+  .np-rest{margin-top:12px;padding-top:10px;border-top:1px dashed #bfe3cb;}
+  .np-rest-h{font-size:11px;font-weight:800;color:var(--run-d);margin-bottom:6px;letter-spacing:.03em;}
+  .np-row{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink2);font-weight:600;padding:3px 0;}
+  .np-row .n{flex:0 0 18px;height:18px;border-radius:50%;background:#fff;border:1px solid #bfe3cb;color:var(--run-d);
+    font-size:10.5px;font-weight:800;display:grid;place-items:center;}
+  .np-row b{font-family:var(--mono);font-weight:800;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+  .np-row .q{font-family:var(--mono);flex-shrink:0;}
+  .np-row .d{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink3);flex-shrink:0;}
+  .np-row .lt{color:var(--stop-d);font-weight:800;flex-shrink:0;}
 
   /* ── Records ── */
   .rec-bar{display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;}
@@ -1977,8 +1986,9 @@ function renderStatus(){
   else msg = `<span class="em">✅</span>${esc(selectedMachineId)} / ${esc(scan.partNo)} 開始できます`;
 
   // 予定に次の注文があれば、それを先に出す（終了したらそのまま次を開始できる）
-  let nx = null;
-  try{ nx = selectedMachineId ? nextOrderFor(selectedMachineId) : null; }catch(e){ console.warn('nextOrder', e); }
+  let up = [];
+  try{ up = selectedMachineId ? upcomingFor(selectedMachineId, 4) : []; }catch(e){ console.warn('nextOrder', e); }
+  const nx = up[0] || null;
   const scanOff = isDemo() && isPC;   // デモ中のパソコンは品番を予定（注文）から入れる
   const generic = scanOff
     ? (nx ? '' : `<div class="idle-msg">${selectedMachineId
@@ -1995,7 +2005,7 @@ function renderStatus(){
       <div class="st-strip">${sdNow ? '🛌 休止期間' : '待機中'}</div>
       <div class="st-body">
         ${sdNow ? `<div class="workday-note" style="margin-bottom:12px"><span>🛌 この機械は<b>休止期間</b>です${sdNow.label?'（'+esc(sdNow.label)+'）':''}　${esc(sdNow.from.replace(/-/g,'/'))}〜${esc(sdNow.to.replace(/-/g,'/'))}<br>自動記録は作らず、日別集計でも休業として扱います</span></div>` : ''}
-        ${nx ? planNextCard(nx) : ''}
+        ${nx ? planNextCard(up) : ''}
         ${generic}
       </div>
     </div>`;
@@ -4463,6 +4473,13 @@ function planAutoDone(){
   });
   return n;
 }
+// その機械のこれからの予定（まだ始めていないものを順番に。先頭が「次の予定」）
+function upcomingFor(machineId, max){
+  if(!machineId || !store.orders || !store.orders.length) return [];
+  if(planAutoDone()) save();
+  planWorkMemo = {};
+  return planLayout(machineId).filter(x=> !x.o.startedAt).slice(0, max || 4);
+}
 // その機械の次の予定（まだ始めていない一番前の予定）
 function nextOrderFor(machineId){
   if(!machineId || !store.orders || !store.orders.length) return null;
@@ -4507,15 +4524,20 @@ function planLinkStart(rec, orderId){
   return { o, earlier };
 }
 // 待機中の画面に出す「次の予定」
-function planNextCard(nx){
-  const o = nx.o, nowP = planTodayPos(o.machineId);
+function planNextCard(list){
+  const nx = list[0], o = nx.o, nowP = planTodayPos(o.machineId);
   const early = nx.s.d > nowP.d;
+  const rest = list.slice(1);
+  const restHtml = rest.length ? `<div class="np-rest"><div class="np-rest-h">このあとの予定</div>${
+    rest.map((x,i)=>`<div class="np-row"><span class="n">${i+2}</span><b>${esc(x.o.partNo)}</b><span class="q">${x.o.qty.toLocaleString()}個</span><span class="d">${numMD(x.s.d)}〜${numMD(x.last)}</span>${x.late?'<span class="lt">⚠遅れ</span>':''}</div>`).join('')
+  }</div>` : '';
   return `<div class="next-plan">
     <div class="np-h">📅 次の予定${demoChip()}</div>
     <div class="np-part">${esc(o.partNo)}</div>
     <div class="np-sub">${o.qty.toLocaleString()}個 ・ 納期 <b>${numMDW(dayNum(o.due))}</b><br>予定 ${numMDW(nx.s.d)}〜${numMDW(nx.last)}${nx.c.ok ? `（見込み${planFmtDays(nx.c.need)}日）` : ''}${nx.late ? ' <span class="np-late">納期に遅れる見込み</span>' : ''}</div>
     <button class="btn-big btn-start" onclick="startFromOrder('${o.id}')"><span class="ic">▶</span>この予定で開始</button>
     ${early ? '<div class="np-note">予定より早く始めると、予定表が前にずれます</div>' : ''}
+    ${restHtml}
   </div>`;
 }
 // 「この予定で開始」：品番・コイル・回転数を入れて、そのまま開始する
@@ -4816,7 +4838,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.49';
+const APP_VERSION = '2026-06-28.50';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
