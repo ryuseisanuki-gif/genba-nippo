@@ -794,6 +794,8 @@
   .rchip.warn:not(.sel) .n{color:var(--pause-d);opacity:1;font-weight:900;}
   .rchip .n-red{color:var(--stop);font-weight:900;margin-left:6px;font-family:var(--mono);}
   .rchip.sel .n-red{color:#ff9d92;}
+  .rchip.od-chip{color:var(--stop);border-color:#eec4bf;}       /* 納期超過は文字も赤 */
+  .rchip.od-chip.sel{color:#ff9d92;border-color:var(--ink);}
   .unreg-card .mrow{border-color:#ecd7a6;}
   .unreg-card .mrow-ed + .od-del{margin-left:6px;}
   .ign-chip{display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border-radius:7px;padding:2px 4px 2px 8px;font-family:var(--mono);font-size:11.5px;margin:2px;}
@@ -4829,7 +4831,7 @@ function renderPlanViewChips(){
   const n = overdueOrders().length;
   $('#planViewChips').innerHTML =
     `<button class="rchip${planView==='plan'?' sel':''}" onclick="setPlanView('plan')">予定</button>` +
-    `<button class="rchip${planView==='overdue'?' sel':''}" onclick="setPlanView('overdue')">納期超過<span class="n-red">${n}</span></button>`;
+    `<button class="rchip od-chip${planView==='overdue'?' sel':''}" onclick="setPlanView('overdue')">納期超過<span class="n-red">${n}</span></button>`;
   $('#planMainView').hidden = planView !== 'plan';
   $('#planOverdue').hidden = planView !== 'overdue';
 }
@@ -5474,7 +5476,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.62';
+const APP_VERSION = '2026-06-28.63';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
