@@ -4175,8 +4175,12 @@ function planLayout(machineId, override){
     if(!o.startedAt && posCmp(nowP, p) > 0) p = nowP;   // まだ始めていない予定は「今」より前には置かない（遅れたら後ろへずれる）
     p = posNorm(p, machineId);
     const a = posAdvance(p, c.ok ? c.need : 1, machineId);   // 速さ不明は1日で仮置き
-    cur = a.end;
-    out.push({ o, c, s:p, e:a.end, last:a.last, late: c.ok && a.last > dayNum(o.due) });
+    let e = a.end, last = a.last, over = false;
+    if(o.startedAt && posCmp(nowP, e) > 0){   // 見込みより長引いている作業は、今まで伸ばす（後ろの予定もその分ずれる）
+      e = nowP; last = nowP.d; over = true;
+    }
+    cur = e;
+    out.push({ o, c, s:p, e, last, over, late: c.ok && last > dayNum(o.due) });
   });
   return out;
 }
@@ -4328,7 +4332,7 @@ function planBarHtml(x, todayN){
   const l = Math.max(0, x.s.d + x.s.f - planFirst), r = Math.min(planN, x.e.d + x.e.f - planFirst);
   if(r <= 0 || l >= planN || r <= l) return '';
   const o = x.o, cls = (o.needsInput ? 'tbd' : !x.c.ok ? 'unk' : x.late ? 'late' : 'ok') + (o.startedAt ? ' running' : '');
-  const tip = (o.needsInput ? '【残りの数量・納期が未入力（仮に1日分で表示）】\n' : '') + `${o.partNo}　${o.qty.toLocaleString()}個\n${numMDW(x.s.d)} 〜 ${numMDW(x.last)}\n納期 ${numMDW(dayNum(o.due))}${x.late?'（遅れる）':''}\n` +
+  const tip = (o.needsInput ? '【残りの数量・納期が未入力（仮に1日分で表示）】\n' : '') + (x.over ? '【見込みを過ぎて作業中】\n' : '') + `${o.partNo}　${o.qty.toLocaleString()}個\n${numMDW(x.s.d)} 〜 ${numMDW(x.last)}\n納期 ${numMDW(dayNum(o.due))}${x.late?'（遅れる）':''}\n` +
     (x.c.ok ? `見込み${planFmtDays(x.c.need)}日（${x.c.sp.basis}）` : '速さ不明（1日で仮置き）');
   const drag = canDrag ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','bar')" ondragend="planDragEnd()"` : '';
   return `<div class="g-bar ${cls}${x.last < todayN ? ' past' : ''}" style="left:${l/planN*100}%;width:${(r-l)/planN*100}%" title="${esc(tip)}" onclick="openOrderSheet('${o.id}')"${drag}>` +
@@ -4812,7 +4816,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.48';
+const APP_VERSION = '2026-06-28.49';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
