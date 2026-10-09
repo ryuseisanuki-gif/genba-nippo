@@ -983,7 +983,8 @@
       <button class="btn-add" onclick="addPartMaster()">追加</button>
     </div>
     <div class="set-note">作業や注文で使った品番は自動でここに登録されます。品名を入れると、日報入力の「過去の品番」や記録、予定の注文に出ます（全端末で共有）。</div>
-    <input type="text" id="masterSearch" class="rec-filter" style="width:100%;margin-top:10px" placeholder="🔍 品番・品名で絞り込み" oninput="masterFilter=this.value; renderMaster()">
+    <input type="text" id="masterSearch" class="rec-filter" style="width:100%;margin-top:10px" placeholder="🔍 品番・品名・機械（P-6など）で絞り込み" oninput="masterFilter=this.value; renderMaster()">
+    <div class="rec-chips" id="masterMachChips" style="margin:10px 0 0"></div>
   </div>
   <div id="masterList"></div>
 </section>
@@ -3780,13 +3781,28 @@ function partMachines(partNo){
 function partIsUsed(partNo){
   return store.records.some(r=> (r.partNo||'').trim() === partNo) || (store.orders||[]).some(o=> o.partNo === partNo);
 }
+let masterMachine = '';   // 機械で絞り込み（''＝全部）
+function setMasterMachine(id){ masterMachine = id; renderMaster(); }
+// 全角や長音（Ｐー６ など）も半角にそろえて比べる
+function normSearch(s){
+  return String(s||'').replace(/[Ａ-Ｚａ-ｚ０-９]/g, c=> String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[ー－−‐―]/g, '-').replace(/\s+/g, '').toLowerCase();
+}
 function renderMaster(){
   const el = $('#masterList'); if(!el) return;
   syncPartsMaster();
-  const q = masterFilter.trim().toLowerCase();
-  const list = allPartNos().filter(x=> !q || x.partNo.toLowerCase().includes(q) || partNameOf(x.partNo).toLowerCase().includes(q));
+  if(masterMachine && !store.machines.some(m=> m.id===masterMachine)) masterMachine = '';
+  const chips = $('#masterMachChips');
+  if(chips) chips.innerHTML = [{id:'', label:'全部'}].concat(store.machines.map(m=>({ id:m.id, label:m.id })))
+    .map(x=>`<button class="rchip${masterMachine===x.id?' sel':''}" onclick="setMasterMachine('${esc(x.id)}')">${esc(x.label)}</button>`).join('');
+  const q = normSearch(masterFilter);
+  const list = allPartNos().filter(x=>{
+    const ms = partMachines(x.partNo);
+    if(masterMachine && !ms.includes(masterMachine)) return false;
+    return !q || normSearch(x.partNo).includes(q) || normSearch(partNameOf(x.partNo)).includes(q) || ms.some(m=> normSearch(m).includes(q));
+  });
   const all = allPartNos().length;
-  $('#masterCount').textContent = q ? `${list.length} / ${all}件` : `${all}件`;
+  $('#masterCount').textContent = (q || masterMachine) ? `${list.length} / ${all}件` : `${all}件`;
   if(!list.length){ el.innerHTML = '<div class="rec-empty-note">該当する品番がありません</div>'; return; }
   el.innerHTML = list.map(x=>{
     const ms = partMachines(x.partNo), used = partIsUsed(x.partNo);
@@ -5000,7 +5016,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.55';
+const APP_VERSION = '2026-06-28.56';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
