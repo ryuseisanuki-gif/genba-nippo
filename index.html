@@ -1008,7 +1008,7 @@
     <span class="t">📥 プール</span>
     <span class="s" id="planPoolSub"></span>
     <div class="plan-trash" id="planTrash" hidden ondragover="planTrashOver(event)" ondragleave="planTrashLeave(event)" ondrop="planTrashDrop(event)">🗑️ ここへドラッグで削除</div>
-    <button class="btn-out kakou-btn" onclick="kakouUpdate(false)" title="ファイルサーバーの加工指図残.csv を読み込みます">📄 加工指図更新</button>
+    <button class="btn-out kakou-btn" onclick="kakouUpdate()" title="ファイルサーバーの加工指図残.csv を読み込みます">📄 加工指図更新</button>
     <button class="btn-add" id="planAddBtn" onclick="openOrderSheet()">＋ 注文を追加</button>
   </div>
   <div class="pool" id="planPool" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
@@ -4674,19 +4674,8 @@ const KAKOU_FACTORY = /^第[６6]工場/;
 const KAKOU_OVERDUE_DAYS = 92;
 function appSetting(){ return (store.settings||[]).find(x=> x.id==='app') || {}; }
 function kakouOverdueCut(){ const d = nowDate(); d.setDate(d.getDate() - KAKOU_OVERDUE_DAYS); return dateKey(d); }
-// 一度選んだファイルを覚えておく（次からはボタンを押すだけで読み込める）
-function kakouIdb(mode, val){
-  return new Promise((res, rej)=>{
-    const r = indexedDB.open('genbaFiles', 1);
-    r.onupgradeneeded = ()=> r.result.createObjectStore('h');
-    r.onerror = ()=> rej(r.error);
-    r.onsuccess = ()=>{
-      const os = r.result.transaction('h', mode==='get' ? 'readonly' : 'readwrite').objectStore('h');
-      const q = mode==='get' ? os.get('kakou') : os.put(val, 'kakou');
-      q.onsuccess = ()=> res(q.result); q.onerror = ()=> rej(q.error);
-    };
-  });
-}
+// ファイルはふつうのファイル選択で選んでもらう。
+// （ファイルを覚えておく方式は、ブラウザが共有フォルダ \\192.168.1.204 のファイルの読み込みを許さないため使わない）
 function pickFileByInput(){
   return new Promise(res=>{
     const i = document.createElement('input'); i.type = 'file'; i.accept = '.csv,text/csv';
@@ -4782,43 +4771,14 @@ function kakouLogError(step, e){
   try{ setSetting('kakouLastError', { at: nowIso(), step, msg, ua: navigator.userAgent.slice(0, 160), ver: APP_VERSION }); }catch(_){}
   return msg;
 }
-async function kakouUpdate(pickNew){
-  let file = null, step = 'start';
-  try{
-    if(window.showOpenFilePicker){
-      step = 'idb';
-      let h = pickNew ? null : await kakouIdb('get').catch(()=> null);
-      if(h){
-        step = 'permission';
-        let perm = await h.queryPermission({ mode:'read' });
-        if(perm !== 'granted') perm = await h.requestPermission({ mode:'read' });
-        if(perm !== 'granted') h = null;
-      }
-      if(!h){
-        const ok = await confirmDialog('加工指図のファイルを選ぶ',
-          `次に開く画面で、このファイルを選んでください。\n${KAKOU_PATH}\n\n場所（フォルダ）はコピーしてあるので、画面上のアドレス欄に貼り付けると早いです。一度選べば、次からはボタンを押すだけで読み込みます。\n※ファイルを予定タブへドラッグ＆ドロップしても取り込めます。`, 'ファイルを選ぶ');
-        if(!ok) return;
-        try{ await navigator.clipboard.writeText(KAKOU_PATH.replace(/\\[^\\]+$/, '')); }catch(e){}
-        step = 'picker';
-        [h] = await window.showOpenFilePicker({ multiple:false, types:[{ description:'加工指図（CSV）', accept:{ 'text/csv':['.csv'] } }] });
-        await kakouIdb('put', h).catch(()=>{});
-      }
-      step = 'getFile';
-      file = await h.getFile();
-    } else {
-      step = 'input';
-      file = await pickFileByInput();
-    }
-  }catch(e){
-    if(e && e.name==='AbortError') return;
-    console.warn('kakou file', step, e);
-    const msg = kakouLogError(step, e);
-    // 別の方法（ふつうのファイル選択）で選び直す
-    const ok = await confirmDialog('ファイルを読めませんでした',
-      `（${step}）${msg}\n\n別の方法でファイルを選びます。開いた画面で「加工指図残.csv」を選んでください。\n${KAKOU_PATH}`, 'ファイルを選ぶ');
-    if(!ok) return;
-    file = await pickFileByInput();
-  }
+// 「📄 加工指図更新」：すぐにファイル選択の画面を開く（ブラウザが前に開いたフォルダを覚えているので2回目からは選ぶだけ）
+async function kakouUpdate(){
+  // 場所（フォルダ）をコピーしておく（選択画面のアドレス欄に貼り付けられる）。ボタンの操作のうちに画面を開くため待たない
+  try{ navigator.clipboard.writeText(KAKOU_PATH.replace(/\\[^\\]+$/, '')).catch(()=>{}); }catch(e){}
+  toast('「加工指図残.csv」を選んでください（場所はコピー済み：アドレス欄に貼り付けできます）');
+  let file = null;
+  try{ file = await pickFileByInput(); }
+  catch(e){ kakouLogError('input', e); toast('ファイル選択の画面を開けませんでした','error'); return; }
   if(!file) return;
   await kakouImportFile(file);
 }
@@ -4860,7 +4820,7 @@ document.addEventListener('drop', async e=>{
 function renderKakouInfo(){
   const el = $('#kakouInfo'); if(!el) return;
   const at = appSetting().kakouAt;
-  el.innerHTML = `📄 加工指図：${at ? '最終更新 ' + fmtDT(at) : 'まだ取り込んでいません'}　<button class="linkbtn" onclick="kakouUpdate(true)">ファイルを選び直す</button>　<span>（CSVをこの画面へドラッグ＆ドロップしても取り込めます）</span>`;
+  el.innerHTML = `📄 加工指図：${at ? '最終更新 ' + fmtDT(at) : 'まだ取り込んでいません'}　<span>ファイル：${esc(KAKOU_PATH)}（ボタンで選ぶか、この画面へドラッグ＆ドロップ）</span>`;
 }
 /* 予定タブの「予定」「納期超過」切り替え（最初は予定） */
 let planView = 'plan';
@@ -5515,7 +5475,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.64';
+const APP_VERSION = '2026-06-28.65';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
