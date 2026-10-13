@@ -698,8 +698,8 @@
   [hidden]{display:none!important;}
 
   /* ── 予定（機械ごとの予定表＋プール） ── */
-  .tab[data-tab=plan]{display:none;}             /* パソコンだけに出す */
-  body.is-pc .tab[data-tab=plan]{display:block;}
+  .tab[data-tab=plan],.tab[data-tab=master]{display:none;}             /* 予定・品番はパソコンだけに出す */
+  body.is-pc .tab[data-tab=plan],body.is-pc .tab[data-tab=master]{display:block;}
   .plan-demo{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;background:#eef4fc;border:1px solid #bcd3ef;border-radius:11px;
     padding:10px 13px;margin-bottom:11px;font-size:12.5px;color:#23538a;font-weight:600;line-height:1.55;}
   .plan-demo span{flex:1;min-width:240px;}
@@ -5493,7 +5493,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.67';
+const APP_VERSION = '2026-06-28.68';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
