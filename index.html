@@ -779,8 +779,20 @@
   .plan-trash + .kakou-btn{margin-left:8px;}
   .oc-kakou{font-size:11.5px;color:var(--ink3);font-weight:600;margin-top:-3px;}
   .kakou-info{font-size:12px;color:var(--ink3);font-weight:600;margin:8px 2px 0;}
+  .kakou-info .kk-warn{color:var(--pause-d);font-weight:800;}
+  .kakou-info .kk-link{border:none;background:none;padding:0 2px;color:var(--blue);font:inherit;font-weight:800;text-decoration:underline;cursor:pointer;}
   .linkbtn{border:none;background:none;color:var(--blue);font-size:12px;font-weight:700;text-decoration:underline;padding:0;font-family:var(--sans);}
   .od-list{display:flex;flex-direction:column;gap:7px;}
+  /* まとめて選ぶ（チェック・全選択） */
+  .bulk-bar{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;background:var(--surface2);border:1px solid var(--line);border-radius:11px;padding:8px 12px;margin:0 0 8px;grid-column:1/-1;}
+  .bulk-bar{position:sticky;top:128px;z-index:6;box-shadow:0 3px 10px rgba(0,0,0,.08);}   /* 長い一覧でも上（見出しとタブの下）に残す */
+  .bulk-bar label{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:800;color:var(--ink);cursor:pointer;}
+  .bulk-n{font-size:12.5px;font-weight:700;color:var(--ink3);}
+  .bulk-acts{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;}
+  .bulk-acts button{flex:0 0 auto;padding:8px 12px;margin:0;}
+  .bulk-acts button:disabled{opacity:.35;pointer-events:none;}
+  .bulk-ck{width:20px;height:20px;flex:none;margin:0;accent-color:var(--orange);cursor:pointer;}
+  .oc-top .bulk-ck{margin-right:2px;}
   .od-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--surface);border:1px solid #eec4bf;border-left:4px solid var(--stop);border-radius:11px;padding:10px 12px;}
   .od-main{flex:1;min-width:240px;font-size:13px;color:var(--ink2);font-weight:600;}
   .od-main b{font-family:var(--mono);color:var(--ink);font-size:14px;}
@@ -1400,6 +1412,111 @@ let planEdit = false;                 // 編集中か
 const planDraftDel = new Set();       // 編集中に消した注文（確定時にサーバーから消す）
 const ORDER_WORK_FIELDS = ['startedAt','recId','done','doneAt','doneQty'];   // 作業の進み（編集中でも他端末の変更を取り込む）
 function planDelOrderDoc(id){ if(planEdit) planDraftDel.add(id); else delDoc('orders', id); }
+/* ===== まとめて選ぶ（チェックを付けて、まとめて削除など。「全選択」は今見えている分） ===== */
+const bulkSel = { pool:new Set(), overdue:new Set(), master:new Set(), unreg:new Set() };
+const bulkShown = { pool:[], overdue:[], master:[], unreg:[] };   // 今の画面に出ている id
+// 一覧を描くときに呼ぶ：見えなくなったものの選択は外す
+function bulkSetShown(kind, ids){
+  bulkShown[kind] = ids;
+  const s = new Set(ids);
+  [...bulkSel[kind]].forEach(id=>{ if(!s.has(id)) bulkSel[kind].delete(id); });
+}
+function bulkCk(kind, id){
+  return `<input type="checkbox" class="bulk-ck" data-k="${kind}" data-id="${esc(id)}"${bulkSel[kind].has(id) ? ' checked' : ''} onchange="bulkToggle(this)" title="選ぶ">`;
+}
+// actions: [{label, fn:'関数名', cls}]（関数は選んだ id の配列を受け取る）
+function bulkBarHtml(kind, actions){
+  return `<div class="bulk-bar" data-k="${kind}">
+    <label><input type="checkbox" class="bulk-ck bulk-all" onchange="bulkAll('${kind}', this.checked)"> 全選択</label>
+    <span class="bulk-n"></span>
+    <span class="bulk-acts">${actions.map(a=>`<button class="${a.cls||'od-del'}" onclick="bulkRun('${kind}','${a.fn}')">${a.label}</button>`).join('')}</span>
+  </div>`;
+}
+function bulkToggle(el){
+  const s = bulkSel[el.dataset.k];
+  if(el.checked) s.add(el.dataset.id); else s.delete(el.dataset.id);
+  bulkRefresh(el.dataset.k);
+}
+function bulkAll(kind, on){
+  bulkSel[kind] = new Set(on ? bulkShown[kind] : []);
+  document.querySelectorAll(`.bulk-ck[data-k="${kind}"]`).forEach(c=>{ c.checked = on; });
+  bulkRefresh(kind);
+}
+// 件数・ボタン・全選択のチェックを今の選択に合わせる（一覧は描き直さない）
+function bulkRefresh(kind){
+  const n = bulkSel[kind].size, all = bulkShown[kind].length;
+  document.querySelectorAll(`.bulk-bar[data-k="${kind}"]`).forEach(bar=>{
+    bar.querySelector('.bulk-n').textContent = n ? `${n}件を選択中` : 'チェックを付けて選べます';
+    const a = bar.querySelector('.bulk-all'); a.checked = all > 0 && n === all; a.indeterminate = n > 0 && n < all;
+    bar.querySelectorAll('.bulk-acts button').forEach(b=>{ b.disabled = !n; });
+  });
+}
+async function bulkRun(kind, fn){
+  const ids = [...bulkSel[kind]].filter(id=> bulkShown[kind].includes(id));
+  if(!ids.length) return;
+  const done = await window[fn](ids);
+  if(done) bulkSel[kind].clear();
+  if(kind==='pool' || kind==='overdue') renderPlan(); else renderMaster();
+}
+// 注文をまとめて消す（加工指図の注文は、次の取り込みで戻らないように覚えておく）
+function deleteOrdersBulk(ids){
+  const set = new Set(ids), del = store.orders.filter(o=> set.has(o.id));
+  const keys = new Set(appSetting().kakouDeleted || []), n0 = keys.size;
+  del.forEach(o=>{ if(o.kakouKey) keys.add(o.kakouKey); });
+  if(keys.size !== n0) setSetting('kakouDeleted', [...keys]);
+  store.orders = store.orders.filter(o=> !set.has(o.id));
+  if(!isDemo()) del.forEach(o=> planDelOrderDoc(o.id));
+  save();
+  return del.length;
+}
+async function poolDeleteSel(ids){
+  const ok = await confirmDialog('注文の削除', `選んだ ${ids.length}件の注文をプールから削除します。\n加工指図から入れた注文は、次に「加工指図更新」をしても戻りません。`, `${ids.length}件を削除する`, true);
+  if(!ok) return false;
+  toast(`${deleteOrdersBulk(ids)}件を削除しました`);
+  return true;
+}
+async function overdueDeleteSel(ids){
+  const ok = await confirmDialog('指図の削除', `選んだ ${ids.length}件の指図を削除します。\n次に「加工指図更新」をしても、これらの指図は入れません。`, `${ids.length}件を削除する`, true);
+  if(!ok) return false;
+  toast(`${deleteOrdersBulk(ids)}件を削除しました`);
+  return true;
+}
+async function overdueToPoolSel(ids){
+  const ok = await confirmDialog('プールに入れる', `選んだ ${ids.length}件の指図を予定のプールに入れます。`, `${ids.length}件を入れる`);
+  if(!ok) return false;
+  const set = new Set(ids); let n = 0;
+  store.orders.forEach(o=>{ if(set.has(o.id) && o.bucket==='overdue'){ delete o.bucket; n++; } });
+  save(); toast(`${n}件をプールに入れました`,'success');
+  return true;
+}
+async function masterDeleteSel(partNos){
+  const used = partNos.filter(partIsUsed).length;
+  const ok = await confirmDialog('品番の削除',
+    `選んだ ${partNos.length}件の品番を品番マスターから消します。` + (used ? `\nうち ${used}件は作業や注文で使っている品番なので、一覧（と「過去の品番」）から隠すだけです。これまでの記録や注文は消えません。` : ''),
+    `${partNos.length}件を削除する`, true);
+  if(!ok) return false;
+  partNos.forEach(deletePartCore);
+  save(); renderPartHistory();
+  toast(`${partNos.length}件の品番を削除しました`);
+  return true;
+}
+async function unregRegisterSel(partNos){
+  const ok = await confirmDialog('品番の登録', `選んだ ${partNos.length}品番を品番マスターに登録し、指図をプールに入れます（納期から3か月以上すぎた指図は「納期超過」へ）。`, `${partNos.length}品番を登録する`);
+  if(!ok) return false;
+  let toPool = 0, toOver = 0;
+  partNos.forEach(p=>{ const r = unregRegisterCore(p); toPool += r.toPool; toOver += r.toOver; });
+  save();
+  const where = [toPool ? `プールに${toPool}件` : '', toOver ? `予定タブの「納期超過」に${toOver}件` : ''].filter(Boolean).join('・');
+  toast(`${partNos.length}品番を登録しました（${where || '指図はありません'}）`,'success');
+  return true;
+}
+async function unregIgnoreSel(partNos){
+  const ok = await confirmDialog('品番を除外', `選んだ ${partNos.length}品番の指図を取り込まないようにします（プレスの仕事でない品番など）。あとで「戻す」で元に戻せます。`, `${partNos.length}品番を除外する`, true);
+  if(!ok) return false;
+  unregIgnoreCore(partNos);
+  toast(`${partNos.length}品番を除外しました`);
+  return true;
+}
 // 編集中でも、作業の開始・完了はすぐサーバーへ送る（予定の並びは確定まで送らない）
 function pushOrderWorkNow(o){
   if(!planEdit || isDemo() || !fbReady || !db || !o) return;
@@ -1553,7 +1670,18 @@ function ensureOrdersListener(){
   if(ordersUnsub) return;
   ordersUnsub = db.collection('orders').onSnapshot(s=>applySnap('orders', s), e=>console.warn('orders listen', e));
 }
+// 注文・品番・設定は、開いて最初にサーバーの内容を受け取ったとき、サーバーに無いもの（他の端末で消したもの）を手元からも消す。
+// （手元に残った古いものを送り返して、他の端末の変更を元に戻してしまうのを防ぐ。作ったばかりでまだ送れていないものは残す）
+const RECONCILE_KINDS = ['orders','parts','settings'];
+function reconcileFirstSnap(kind, snap){
+  const list = kind==='orders' ? store.orders : kind==='parts' ? store.parts : store.settings;
+  if(!list) return;
+  const ids = new Set(snap.docs.map(d=> d.id));
+  const fresh = x=>{ const t = new Date(x.createdAt || x.at || 0).getTime(); return t > 0 && (rawNowMs() - t) < 30*60000; };
+  for(let i = list.length - 1; i >= 0; i--){ if(!ids.has(list[i].id) && !fresh(list[i])) list.splice(i, 1); }
+}
 function applySnap(kind, snap){
+  if(!firstSnap[kind] && RECONCILE_KINDS.includes(kind)) reconcileFirstSnap(kind, snap);
   if(kind==='orders' && planEdit){
     // 編集中：他の端末からの変更は、作業の進み（開始・完了）と新しい注文だけ取り込む。並びは編集中の内容を残す
     snap.docChanges().forEach(ch=>{
@@ -1593,6 +1721,7 @@ function applySnap(kind, snap){
   }
   if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
   refreshActiveViews();
+  kakouAutoOnce();      // 全部そろったら、加工指図を自動で読み込む（パソコンでファイルを覚えている時）
   // 他の端末が操作したときだけ知らせる（自分の操作は先にローカル反映済みなので鳴らない）
   if(beforeKey !== null && selectedMachineId){
     const afterKey = machineStateKey(selectedMachineId);
@@ -1614,9 +1743,10 @@ function syncPush(){
   store.coils.forEach(c=> cur['coils/'+c.id] = c);
   store.shutdowns.forEach(sd=> cur['shutdowns/'+sd.id] = sd);
   (store.workdays||[]).forEach(w=> cur['workdays/'+w.id] = w);
-  (store.parts||[]).forEach(p=> cur['parts/'+p.id] = p);
-  (store.settings||[]).forEach(s=> cur['settings/'+s.id] = s);
-  if(!isDemo() && !planEdit) (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);   // デモ中・予定の編集中（確定前）は送らない
+  // 品番・設定・注文は、この端末がサーバーの内容を受け取ってから送る（受け取る前に送ると、手元の古い内容でサーバーを上書きしてしまう）
+  if(firstSnap.parts) (store.parts||[]).forEach(p=> cur['parts/'+p.id] = p);
+  if(firstSnap.settings) (store.settings||[]).forEach(s=> cur['settings/'+s.id] = s);
+  if(firstSnap.orders && !isDemo() && !planEdit) (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);   // デモ中・予定の編集中（確定前）は送らない
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -3926,18 +4056,20 @@ function renderMaster(){
   });
   const all = allPartNos().length;
   $('#masterCount').textContent = (q || masterMachine) ? `${list.length} / ${all}件` : `${all}件`;
+  bulkSetShown('master', list.map(x=> x.partNo));
   if(!list.length){ el.innerHTML = '<div class="rec-empty-note">該当する品番がありません</div>'; return; }
-  el.innerHTML = list.map(x=>{
+  el.innerHTML = bulkBarHtml('master', [{ label:'選んだ品番を削除', fn:'masterDeleteSel' }]) + list.map(x=>{
     const ms = partMachines(x.partNo), nm = partNameOf(x.partNo);
     return `<div class="mrow">
       <div class="mrow-top">
-        <span class="mrow-id">${esc(x.partNo)}</span>
+        ${bulkCk('master', x.partNo)}<span class="mrow-id">${esc(x.partNo)}</span>
         ${ms.length ? `<span class="mrow-m">${ms.map(esc).join('・')}</span>` : '<span class="mrow-new">未使用</span>'}
         ${masterEdit ? `<button class="mrow-ed" onclick="openPartSheet('${esc(x.partNo)}')">✎ 編集</button>` : ''}
       </div>
       <div class="mrow-name">${nm ? esc(nm) : '<span class="mrow-none">（品名なし）</span>'}</div>
     </div>`;
   }).join('');
+  bulkRefresh('master');
 }
 /* 品名の変更・削除は各品番の「編集」から行う（一覧では直接書き換えない） */
 const masterEdit = true;
@@ -3981,16 +4113,19 @@ async function deletePartFromSheet(){
          : `${partNo} を品番マスターから消します。本当に削除しますか？`,
     '削除する', true);
   if(!ok){ openPartSheet(partNo); return; }
+  deletePartCore(partNo);
+  save(); renderMaster(); renderPartHistory();
+  toast(`${partNo} を削除しました`);
+}
+function deletePartCore(partNo){
   const p = (store.parts||[]).find(x=> x.partNo===partNo);
-  if(used){   // 記録で使っている品番は消せないので、一覧から隠す（また追加すれば戻る）
+  if(partIsUsed(partNo)){   // 記録で使っている品番は消せないので、一覧から隠す（また追加すれば戻る）
     if(p){ p.hidden = true; p.at = nowIso(); }
     else store.parts.push({ id: partIdOf(partNo), partNo, name:'', hidden:true, at: nowIso() });
   } else {
     store.parts = (store.parts||[]).filter(x=> x.partNo!==partNo);
     if(p) delDoc('parts', p.id);
   }
-  save(); renderMaster(); renderPartHistory();
-  toast(`${partNo} を削除しました`);
 }
 function addPartMaster(){
   if(!masterEdit) return;
@@ -4648,8 +4783,11 @@ function renderPlanPool(){
   const coils = planMachineCoils(mId);
   $('#planPoolSub').textContent = `${mId} で作れる注文 ${items.length}件` + (coils.length ? `（${coils.join('・')}）` : '');
   const other = pooled.length - items.length;
-  el.innerHTML = items.length ? items.map(x=> planCardHtml(x.o, x.fit, mId)).join('')
+  bulkSetShown('pool', planEdit ? items.map(x=> x.o.id) : []);
+  const bar = (planEdit && items.length) ? bulkBarHtml('pool', [{ label:'選んだ注文を削除', fn:'poolDeleteSel' }]) : '';
+  el.innerHTML = items.length ? bar + items.map(x=> planCardHtml(x.o, x.fit, mId)).join('')
     : `<div class="pool-empty">${esc(mId)} で作れる注文はありません。<br>注文が入ったら「＋ 注文を追加」か「📄 加工指図更新」で入れてください。${other>0 ? `<br><small>（他の機械向けの注文 ${other}件）</small>` : ''}</div>`;
+  bulkRefresh('pool');
   renderKakouInfo();
   renderPlanOverdue();
 }
@@ -4670,7 +4808,7 @@ function planCardHtml(o, fit, machineId){
   const drag = (canDrag && planEdit) ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','pool')" ondragend="planDragEnd()"` : '';
   const pname = o.partName || partNameOf(o.partNo);
   return `<div class="oc st-${fit.st}"${drag}>
-    <div class="oc-top"><span class="oc-part">${esc(o.partNo)}</span><span class="oc-basis">${c.ok ? esc(c.sp.basis) : ''}</span></div>
+    <div class="oc-top">${planEdit ? bulkCk('pool', o.id) : ''}<span class="oc-part">${esc(o.partNo)}</span><span class="oc-basis">${c.ok ? esc(c.sp.basis) : ''}</span></div>
     ${pname ? `<div class="oc-name">${esc(pname)}</div>` : ''}
     <div class="oc-sub">${o.qty.toLocaleString()}${esc(o.unit||'個')}　納期 <b>${numMDW(dayNum(o.due))}</b></div>
     ${o.kakouKey ? `<div class="oc-kakou">📄 指図 ${esc(o.kakouKey)}${o.memo ? '・' + esc(o.memo) : ''}</div>` : ''}
@@ -4767,6 +4905,8 @@ function kakouImport(text){
       store.orders.push(o); st.add++;
     }
   }
+  // 第６工場の行が1件も無い＝ファイルの中身がおかしい（書き換え途中など）。全部を完了にしてしまわないよう止める
+  if(!st.match) return { error:'第６工場の指図が1件も見つかりませんでした（ファイルを確認してください）' };
   // CSVから消えた指図（システムで完了したもの）は完了にする。作業中のものは残す
   store.orders.forEach(o=>{
     if(o.src!=='kakou' || o.done || seen.has(o.kakouKey) || o.startedAt) return;
@@ -4785,33 +4925,133 @@ function kakouLogError(step, e){
   try{ setSetting('kakouLastError', { at: nowIso(), step, msg, ua: navigator.userAgent.slice(0, 160), ver: APP_VERSION }); }catch(_){}
   return msg;
 }
-// 「📄 加工指図更新」：すぐにファイル選択の画面を開く（ブラウザが前に開いたフォルダを覚えているので2回目からは選ぶだけ）
+/* 加工指図残.csv の場所を、このパソコンのブラウザに覚えておく（Chrome・Edge）。
+   1回選べば、次からはボタンを押すだけ／ページを開いたときに自動で読み込む。
+   ブラウザの許可が切れていたら、ボタンを押したときに許可を聞く（「毎回許可する」を選ぶと自動で読めるようになる） */
+const KAKOU_IDB = 'genbaKakouFile';
+function kakouIdb(){
+  return new Promise((res, rej)=>{
+    const r = indexedDB.open(KAKOU_IDB, 1);
+    r.onupgradeneeded = ()=> r.result.createObjectStore('h');
+    r.onsuccess = ()=> res(r.result); r.onerror = ()=> rej(r.error);
+  });
+}
+async function kakouGetHandle(){
+  try{
+    const idb = await kakouIdb();
+    return await new Promise(res=>{ const q = idb.transaction('h').objectStore('h').get('file'); q.onsuccess = ()=> res(q.result || null); q.onerror = ()=> res(null); });
+  }catch(e){ return null; }
+}
+async function kakouSetHandle(h){
+  try{
+    const idb = await kakouIdb();
+    await new Promise(res=>{ const tx = idb.transaction('h', 'readwrite'); if(h) tx.objectStore('h').put(h, 'file'); else tx.objectStore('h').delete('file'); tx.oncomplete = res; tx.onerror = res; });
+  }catch(e){}
+  kakouHandleName = h ? h.name : '';
+  renderKakouInfo();
+}
+let kakouHandleName = '';     // 覚えているファイルの名前（表示用）
+let kakouNeedPermit = false;  // 覚えているが、ブラウザの許可が切れている
+let kakouBusy = false;
+// 「📄 加工指図更新」：覚えているファイルから読む。まだ無ければファイルを選ぶ（選んだファイルを覚える）
 async function kakouUpdate(){
+  if(kakouBusy) return;
+  const h = window.showOpenFilePicker ? await kakouGetHandle() : null;
+  if(h){
+    try{
+      let perm = await h.queryPermission({ mode:'read' });
+      if(perm !== 'granted') perm = await h.requestPermission({ mode:'read' });
+      if(perm === 'granted'){ kakouNeedPermit = false; await kakouImportFile(await h.getFile()); return; }
+      toast('ファイルを読む許可がありません。もう一度押して「許可」を選んでください','error');
+      return;
+    }catch(e){
+      console.warn('kakou handle', e);
+      kakouLogError('handle', e);
+      toast('覚えていたファイルを読めませんでした。ファイルを選び直してください','error');
+    }
+  }
+  await kakouPickFile();
+}
+// ファイルを選ぶ（Chrome・Edge は選んだファイルを覚える。できない時はふつうのファイル選択）
+async function kakouPickFile(){
   // 場所（フォルダ）をコピーしておく（選択画面のアドレス欄に貼り付けられる）。ボタンの操作のうちに画面を開くため待たない
   try{ navigator.clipboard.writeText(KAKOU_PATH.replace(/\\[^\\]+$/, '')).catch(()=>{}); }catch(e){}
   toast('「加工指図残.csv」を選んでください（場所はコピー済み：アドレス欄に貼り付けできます）');
+  if(window.showOpenFilePicker){
+    let h = null;
+    try{ [h] = await window.showOpenFilePicker({ id:'kakou', types:[{ description:'CSV', accept:{ 'text/csv':['.csv'] } }] }); }
+    catch(e){ if(e && e.name==='AbortError') return; console.warn('kakou picker', e); kakouLogError('picker', e); }
+    if(h){
+      try{ const f = await h.getFile(); await kakouSetHandle(h); kakouNeedPermit = false; await kakouImportFile(f); return; }
+      catch(e){ console.warn('kakou getFile', e); kakouLogError('getFile', e); toast('このファイルは覚えられませんでした。ふつうの方法で選んでください','error'); }
+    }
+  }
   let file = null;
   try{ file = await pickFileByInput(); }
   catch(e){ kakouLogError('input', e); toast('ファイル選択の画面を開けませんでした','error'); return; }
   if(!file) return;
   await kakouImportFile(file);
 }
+// 覚えているファイルを忘れて選び直す
+async function kakouForget(){
+  const ok = await confirmDialog('ファイルの選び直し', '覚えている加工指図のファイルを忘れて、選び直します。', '選び直す');
+  if(!ok) return;
+  await kakouSetHandle(null); kakouNeedPermit = false;
+  await kakouPickFile();
+}
+// ページを開いたとき（と、しばらくして画面に戻ったとき）に自動で読み込む。パソコンで、ファイルを覚えていて許可がある時だけ
+const KAKOU_AUTO_MIN = 60;      // 前の更新からこの分数たっていたら読み直す（他のパソコンが読んだ分も含む）
+async function kakouAutoUpdate(){
+  if(kakouBusy || !isPC || !window.showOpenFilePicker) return;
+  if(!fbReady || !initialSyncDone || !firstSnap.orders || !firstSnap.parts || !firstSnap.settings) return;   // 全端末の内容を受け取ってから
+  if(planEdit || isDemo()) return;
+  const at = appSetting().kakouAt;
+  if(at && (nowMs() - new Date(at).getTime()) < KAKOU_AUTO_MIN * 60000) return;
+  const h = await kakouGetHandle(); if(!h) return;
+  kakouHandleName = h.name;
+  let perm = 'prompt';
+  try{ perm = await h.queryPermission({ mode:'read' }); }catch(e){}
+  if(perm !== 'granted'){ kakouNeedPermit = true; renderKakouInfo(); return; }   // 許可はボタンを押した時に聞く
+  kakouNeedPermit = false;
+  try{ await kakouImportFile(await h.getFile(), true); }
+  catch(e){ console.warn('kakou auto', e); kakouLogError('auto', e); renderKakouInfo(); }
+}
+let kakouAutoStarted = false;
+function kakouAutoOnce(){
+  if(kakouAutoStarted || !initialSyncDone || !firstSnap.orders || !firstSnap.parts || !firstSnap.settings) return;
+  kakouAutoStarted = true;
+  kakouGetHandle().then(h=>{ kakouHandleName = h ? h.name : ''; renderKakouInfo(); });
+  setTimeout(kakouAutoUpdate, 3000);   // 開いた直後の同期が落ち着いてから
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible' && kakouAutoStarted) kakouAutoUpdate(); });
 // ファイルを読み込んで取り込む（ボタン・ドラッグ＆ドロップ共通）
-async function kakouImportFile(file){
-  toast('加工指図を読み込んでいます…');
+async function kakouImportFile(file, auto){
+  if(kakouBusy) return;
+  kakouBusy = true;
+  try{ await kakouImportFileInner(file, auto); } finally { kakouBusy = false; }
+}
+async function kakouImportFileInner(file, auto){
+  if(!auto) toast('加工指図を読み込んでいます…');
   let st, text;
   try{ text = await readCsvText(file); }
   catch(e){
     console.warn('kakou read', e);
-    const msg = kakouLogError('read', e);
+    const msg = kakouLogError(auto ? 'auto-read' : 'read', e);
+    if(auto){ toast('加工指図の自動更新：ファイルを読めませんでした（「📄 加工指図更新」で読み直せます）','error'); return; }
     await confirmDialog('ファイルを読めませんでした', `${msg}\n\nファイルが他のパソコンで開かれている・書き換え中の可能性があります。少し待ってからもう一度押してください。`, 'OK');
     return;
   }
+  if(planEdit){ toast('予定の編集中は加工指図を取り込めません。「確定」してからもう一度押してください','error'); return; }
   try{ st = kakouImport(text); }
   catch(e){ console.warn('kakou import', e); kakouLogError('parse', e); toast('読み込みに失敗しました（CSVの形が違うかもしれません）','error'); return; }
   if(st.error){ kakouLogError('parse', { name:'CSV', message: st.error }); toast(st.error,'error'); return; }
   renderPlan();
   if($('#page-master').classList.contains('active')) renderMaster();
+  if(auto){
+    const parts = [st.add ? `新しい指図 ${st.add}件` : '', st.upd ? `変更 ${st.upd}件` : '', st.done ? `完了 ${st.done}件` : ''].filter(Boolean);
+    toast('📄 加工指図を自動で更新しました' + (parts.length ? `（${parts.join('・')}）` : '（変わりなし）'), 'success');
+    return;
+  }
   await confirmDialog('加工指図を更新しました',
     `${file.name}（全${st.rows.toLocaleString()}行のうち第６工場 ${st.match}件）\n` +
     `新しい指図：${st.add}件（プール ${st.pool}・未登録の品番 ${st.unreg}・納期超過 ${st.overdue}）\n` +
@@ -4834,7 +5074,11 @@ document.addEventListener('drop', async e=>{
 function renderKakouInfo(){
   const el = $('#kakouInfo'); if(!el) return;
   const at = appSetting().kakouAt;
-  el.innerHTML = `📄 加工指図：${at ? '最終更新 ' + fmtDT(at) : 'まだ取り込んでいません'}　<span>ファイル：${esc(KAKOU_PATH)}（ボタンで選ぶか、この画面へドラッグ＆ドロップ）</span>`;
+  const file = kakouHandleName
+    ? (kakouNeedPermit ? `<b class="kk-warn">⚠️ 自動更新にはブラウザの許可が要ります。「📄 加工指図更新」を押して「許可」を選んでください（「毎回許可する」を選ぶと次から自動）</b>`
+                       : `<span>ファイル：${esc(kakouHandleName)}（覚えています。ページを開くと自動で更新）</span>`) + ` <button class="kk-link" onclick="kakouForget()">選び直す</button>`
+    : `<span>ファイル：${esc(KAKOU_PATH)}（「📄 加工指図更新」で1回選ぶと覚えます。この画面へドラッグ＆ドロップでも可）</span>`;
+  el.innerHTML = `📄 加工指図：${at ? '最終更新 ' + fmtDT(at) : 'まだ取り込んでいません'}　${file}`;
 }
 /* 予定タブの「予定」「納期超過」切り替え（最初は予定） */
 let planView = 'plan';
@@ -4852,14 +5096,17 @@ function renderPlanViewChips(){
 function renderPlanOverdue(){
   const el = $('#planOverdue'); if(!el) return;
   const list = overdueOrders();
+  bulkSetShown('overdue', planEdit ? list.map(o=> o.id) : []);
   if(!list.length){ el.innerHTML = '<div class="rec-empty-note">納期超過の指図はありません。<br>「📄 加工指図更新」で、納期から3か月以上すぎた指図がここに入ります。</div>'; return; }
   el.innerHTML = `<div class="pool-head"><span class="t">⏰ 納期超過の指図</span><span class="s">${list.length}件・納期から3か月以上すぎた加工指図${planEdit ? '' : '（操作は「✎ 予定を編集する」を押してから）'}</span></div>
+    ${planEdit ? bulkBarHtml('overdue', [{ label:'選んだ指図をプールに入れる', fn:'overdueToPoolSel', cls:'oc-go' }, { label:'選んだ指図を削除', fn:'overdueDeleteSel' }]) : ''}
     <div class="od-list">${list.map(o=>`<div class="od-row">
-      <div class="od-main"><b>${esc(o.partNo)}</b>　<span>${esc(partNameOf(o.partNo) || o.partName || '')}</span>
+      ${planEdit ? bulkCk('overdue', o.id) : ''}<div class="od-main"><b>${esc(o.partNo)}</b>　<span>${esc(partNameOf(o.partNo) || o.partName || '')}</span>
         <div class="od-sub">${o.qty.toLocaleString()}${esc(o.unit||'個')}　納期 <span class="od-due">${esc(o.due.replace(/-/g,'/'))}</span>　📄 ${esc(o.kakouKey||'')}${o.memo ? '・' + esc(o.memo) : ''}</div>
       </div>
       ${planEdit ? `<div class="od-btns"><button class="oc-go" onclick="overdueToPool('${o.id}')">プールに入れる</button><button class="oc-ed" onclick="openOrderSheet('${o.id}')">変更</button><button class="od-del" onclick="overdueDelete('${o.id}')">削除</button></div>` : ''}
     </div>`).join('')}</div>`;
+  bulkRefresh('overdue');
 }
 function overdueToPool(id){
   const o = store.orders.find(x=> x.id===id); if(!o) return;
@@ -4886,6 +5133,7 @@ function renderMasterUnreg(){
     g.n++; g.qty += (o.qty||0); groups.set(o.partNo, g);
   });
   const ign = appSetting().kakouIgnore || [];
+  bulkSetShown('unreg', [...groups.keys()]);
   if(!groups.size && !ign.length){
     el.innerHTML = '<div class="rec-empty-note">未登録の品番はありません。<br>「🗓️ 予定」の「📄 加工指図更新」で取り込んだ指図のうち、品番マスターに無い品番がここに出ます。</div>';
     return;
@@ -4893,15 +5141,17 @@ function renderMasterUnreg(){
   el.innerHTML = `<div class="card set-card unreg-card">
     <h3>⚠️ 未登録の品番（加工指図から）<span class="step-hint">${groups.size}品番</span></h3>
     <div class="set-note" style="margin-top:0">品番マスターに無い品番の指図です。「＋ 登録」すると品番マスターに入り、指図がプールに入ります。プレスの仕事でないものは「除外」してください。</div>
+    ${groups.size ? bulkBarHtml('unreg', [{ label:'選んだ品番を登録', fn:'unregRegisterSel', cls:'mrow-ed' }, { label:'選んだ品番を除外', fn:'unregIgnoreSel' }]) : ''}
     ${[...groups.values()].map(g=>`<div class="mrow">
-      <div class="mrow-top"><span class="mrow-id">${esc(g.partNo)}</span><span class="mrow-m">指図 ${g.n}件・${g.qty.toLocaleString()}${esc(g.unit)}</span>
+      <div class="mrow-top">${bulkCk('unreg', g.partNo)}<span class="mrow-id">${esc(g.partNo)}</span><span class="mrow-m">指図 ${g.n}件・${g.qty.toLocaleString()}${esc(g.unit)}</span>
         <button class="mrow-ed" onclick="unregRegister('${esc(g.partNo)}')">＋ 登録</button><button class="od-del" onclick="unregIgnore('${esc(g.partNo)}')">除外</button></div>
       <div class="mrow-name">${g.name ? esc(g.name) : '<span class="mrow-none">（品名なし）</span>'}</div>
     </div>`).join('')}
     ${ign.length ? `<div class="set-note">除外中：${ign.map(p=>`<span class="ign-chip">${esc(p)} <button onclick="unregUnignore('${esc(p)}')">戻す</button></span>`).join(' ')}</div>` : ''}
   </div>`;
+  bulkRefresh('unreg');
 }
-function unregRegister(partNo){
+function unregRegisterCore(partNo){
   const o0 = store.orders.find(o=> o.partNo===partNo && o.bucket==='unreg');
   setPartName(partNo, (o0 && o0.partName) || '');    // 品番マスターに登録（品名は加工指図のもの）
   const cut = kakouOverdueCut();
@@ -4909,6 +5159,10 @@ function unregRegister(partNo){
   store.orders.forEach(o=>{
     if(o.partNo===partNo && o.bucket==='unreg'){ if(o.due < cut){ o.bucket = 'overdue'; toOver++; } else { delete o.bucket; toPool++; } }
   });
+  return { toPool, toOver };
+}
+function unregRegister(partNo){
+  const { toPool, toOver } = unregRegisterCore(partNo);
   save(); renderMaster();
   const where = [toPool ? `プールに${toPool}件` : '', toOver ? `予定タブの「納期超過」に${toOver}件` : ''].filter(Boolean).join('・');
   toast(`${partNo} を品番マスターに登録しました（${where || '指図はありません'}）`,'success');
@@ -4916,11 +5170,16 @@ function unregRegister(partNo){
 async function unregIgnore(partNo){
   const ok = await confirmDialog('品番を除外', `${partNo} の指図を取り込まないようにします（プレスの仕事でない品番など）。あとで「戻す」で元に戻せます。`, '除外する', true);
   if(!ok) return;
-  const ign = new Set(appSetting().kakouIgnore || []); ign.add(partNo);
-  setSetting('kakouIgnore', [...ign]);
-  store.orders.forEach(o=>{ if(o.partNo===partNo && o.bucket==='unreg') o.bucket = 'ignored'; });
-  save(); renderMaster();
+  unregIgnoreCore([partNo]);
+  renderMaster();
   toast(`${partNo} を除外しました`);
+}
+function unregIgnoreCore(partNos){
+  const ign = new Set(appSetting().kakouIgnore || []), set = new Set(partNos);
+  partNos.forEach(p=> ign.add(p));
+  setSetting('kakouIgnore', [...ign]);
+  store.orders.forEach(o=>{ if(set.has(o.partNo) && o.bucket==='unreg') o.bucket = 'ignored'; });
+  save();
 }
 function unregUnignore(partNo){
   setSetting('kakouIgnore', (appSetting().kakouIgnore || []).filter(p=> p!==partNo));
@@ -4964,6 +5223,9 @@ async function planCancelEdit(){
       const snap = await db.collection('orders').get();
       store.orders = snap.docs.map(d=> d.data());
       snap.docs.forEach(d=>{ lastSynced['orders/'+d.id] = JSON.stringify(d.data()); });
+      // 編集中に消して「次の取り込みで戻さない」にした指図も、取り消しで戻ったので外す
+      const back = new Set(store.orders.map(o=> o.kakouKey).filter(Boolean)), kd = appSetting().kakouDeleted || [];
+      if(kd.some(k=> back.has(k))) setSetting('kakouDeleted', kd.filter(k=> !back.has(k)));
     }catch(e){ console.warn('reload orders', e); toast('元に戻せませんでした（通信を確認してください）','error'); }
   } else if(isDemo()){
     try{ const s = localStorage.getItem(PLAN_DEMO_KEY); store.orders = s ? JSON.parse(s) : []; }catch(e){}
@@ -5493,7 +5755,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.68';
+const APP_VERSION = '2026-06-28.69';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
