@@ -1694,6 +1694,7 @@ function applySnap(kind, snap){
       ORDER_WORK_FIELDS.forEach(k=>{ if(k in data) o[k] = data[k]; else delete o[k]; });
     });
     firstSnap.orders = true; dataVer++;
+    sweepOrderTombs();
     refreshActiveViews();
     return;
   }
@@ -1705,9 +1706,10 @@ function applySnap(kind, snap){
     if(ch.type==='removed'){ if(i>=0) arr.splice(i,1); delete lastSynced[kind+'/'+id]; }
     else { if(i>=0) arr[i] = data; else arr.push(data); lastSynced[kind+'/'+id] = JSON.stringify(data); }
   });
+  firstSnap[kind] = true;
+  if(kind==='orders' || kind==='settings') sweepOrderTombs();   // 消したはずの注文が戻ってきていたら消し直す
   dataVer++;
   try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
-  firstSnap[kind] = true;
   if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns && firstSnap.workdays){
     initialSyncDone = true;
     enableAutoCreate();   // 全端末のデータが揃ってから自動記録を作る（二重作成の防止）
@@ -1745,8 +1747,9 @@ function syncPush(){
   (store.workdays||[]).forEach(w=> cur['workdays/'+w.id] = w);
   // 品番・設定・注文は、この端末がサーバーの内容を受け取ってから送る（受け取る前に送ると、手元の古い内容でサーバーを上書きしてしまう）
   if(firstSnap.parts) (store.parts||[]).forEach(p=> cur['parts/'+p.id] = p);
-  if(firstSnap.settings) (store.settings||[]).forEach(s=> cur['settings/'+s.id] = s);
-  if(firstSnap.orders && !isDemo() && !planEdit) (store.orders||[]).forEach(o=> cur['orders/'+o.id] = o);   // デモ中・予定の編集中（確定前）は送らない
+  if(firstSnap.settings) (store.settings||[]).forEach(s=>{ if(s.id!=='orderDel') cur['settings/'+s.id] = s; });   // 消した注文の印は orderTombWrite で足していく
+  const tombs = orderTombs();
+  if(firstSnap.orders && !isDemo() && !planEdit) (store.orders||[]).forEach(o=>{ if(!tombs[o.id]) cur['orders/'+o.id] = o; });   // デモ中・予定の編集中（確定前）は送らない
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -1773,10 +1776,41 @@ function flushPendingDels(){
   pendingDels = []; savePendingDels();
   list.forEach(x=> db.collection(x.k).doc(x.i).delete().catch(e=>{ console.warn('del retry', x, e); queueDel(x.k, x.i); }));
 }
-function delDoc(kind, id){
+function delDoc(kind, id, noTomb){
+  if(kind==='orders' && !noTomb) orderTombAdd(id);
   delete lastSynced[kind+'/'+id];
   if(fbReady && db) db.collection(kind).doc(id).delete().catch(e=>{ console.warn('del', kind, id, e); queueDel(kind, id); });
   else queueDel(kind, id);
+}
+
+/* 消した注文の印（settings/orderDel の ids：注文id → 消した時刻）。
+   圏外だった端末や古い版の端末が、消した注文を送り返してしまっても、見つけしだい消し直す */
+function orderTombs(){ const d = (store.settings||[]).find(x=> x.id==='orderDel'); return (d && d.ids) || {}; }
+function orderTombAdd(id){
+  store.settings = store.settings || [];
+  let d = store.settings.find(x=> x.id==='orderDel');
+  if(!d){ d = { id:'orderDel', ids:{} }; store.settings.push(d); }
+  d.ids = d.ids || {};
+  d.ids[id] = nowIso();
+  orderTombWrite(id, d.ids[id]);
+}
+// 他の端末の印を消さないよう、足す分だけを書き込む（merge）
+function orderTombWrite(id, at){
+  if(!fbReady || !db) return;
+  db.collection('settings').doc('orderDel').set({ id:'orderDel', ids:{ [id]: at } }, { merge:true }).catch(e=> console.warn('orderDel', e));
+}
+function sweepOrderTombs(){
+  const t = orderTombs();
+  if(!store.orders || !Object.keys(t).length) return 0;
+  let n = 0;
+  for(let i = store.orders.length - 1; i >= 0; i--){
+    const id = store.orders[i].id;
+    if(!t[id]) continue;
+    store.orders.splice(i, 1); n++;
+    if(lastSynced['orders/'+id] !== undefined && !isDemo()) delDoc('orders', id, true);   // サーバーに戻ってきていたら消し直す
+  }
+  if(n) dataVer++;
+  return n;
 }
 
 /* ===== STATE ===== */
@@ -1966,7 +2000,12 @@ function resolveConfirm(v){
 
 /* ===== TABS ===== */
 document.querySelectorAll('.tab').forEach(t=>{
-  t.onclick = ()=>{
+  t.onclick = async ()=>{
+    // 予定の編集中に別のタブへ移るときは、確定するか聞く（確定しないと他の端末に出ず、閉じると消える）
+    if(planEdit && t.dataset.tab!=='plan' && $('#page-plan').classList.contains('active')){
+      const ok = await confirmDialog('予定の編集中です', '予定の変更はまだ確定していません。確定しないまま閉じると、変更（削除を含む）は元に戻ります。\n今すぐ確定しますか？', '✓ 確定する');
+      if(ok) planCommitEdit();
+    }
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
     document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
@@ -4871,7 +4910,7 @@ function kakouImport(text){
   const v = (r, i)=> i >= 0 ? String(r[i]==null ? '' : r[i]).trim() : '';
   const cut = kakouOverdueCut(), today = dateKey(nowDate());
   const ignore = new Set(appSetting().kakouIgnore || []);
-  const deleted = new Set(appSetting().kakouDeleted || []);
+  const deleted = new Set(appSetting().kakouDeleted || []), tombs = orderTombs();
   const inMaster = p => (store.parts||[]).some(x=> x.partNo===p && !x.hidden);
   const seen = new Set();
   const st = { rows: rows.length - 1, match:0, add:0, upd:0, done:0, pool:0, unreg:0, overdue:0, skip:0 };
@@ -4884,10 +4923,10 @@ function kakouImport(text){
     const partNo = v(r, C.part); if(!partNo) continue;
     const key = `${v(r, C.no)}-${v(r, C.line)}`;
     st.match++; seen.add(key);
-    if(deleted.has(key)) continue;                               // アプリで削除した指図は入れない
+    const id = 'kk_' + key.replace(/[^0-9A-Za-z\-]/g, '_');
+    if(deleted.has(key) || tombs[id]) continue;                  // アプリで削除した指図は入れない
     const info = { src:'kakou', kakouKey:key, partNo, partName:v(r, C.name), qty, due:kakouDate(v(r, C.due)) || today,
       unit:v(r, C.unit), size:v(r, C.size), memo:v(r, C.memo), lot:v(r, C.lot), orderDate:kakouDate(v(r, C.od)) };
-    const id = 'kk_' + key.replace(/[^0-9A-Za-z\-]/g, '_');
     let o = store.orders.find(x=> x.id===id || x.kakouKey===key);
     if(o){
       // 数量・納期など指図の内容だけ更新（予定の位置・作業の進み・プールに入れたかどうかは触らない）
@@ -5755,7 +5794,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.69';
+const APP_VERSION = '2026-06-28.70';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
