@@ -794,6 +794,7 @@
   .bulk-ck{width:20px;height:20px;flex:none;margin:0;accent-color:var(--orange);cursor:pointer;}
   .oc-top .bulk-ck{margin-right:2px;}
   .od-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--surface);border:1px solid #eec4bf;border-left:4px solid var(--stop);border-radius:11px;padding:10px 12px;}
+  .od-row.tr-row{border-color:var(--line);border-left-color:var(--ink3);}   /* ゴミ箱の行は赤くしない */
   .od-main{flex:1;min-width:240px;font-size:13px;color:var(--ink2);font-weight:600;}
   .od-main b{font-family:var(--mono);color:var(--ink);font-size:14px;}
   .od-sub{font-size:12px;margin-top:3px;color:var(--ink3);}
@@ -1028,6 +1029,7 @@
   <div class="set-note">速さは、その機械でその品番を作った日の記録（動いていた時間あたりの個数）から計算します。記録が5日未満の品番は理論値（回転数÷何回転で1個）で、1日の稼働を90%として計算します。土日祝と休止日は数えません。納期の日までに作り終われば「間に合う」です。</div>
   </div>
   <div id="planOverdue" hidden></div>
+  <div id="planTrashView" hidden></div>
 </section>
 
 <!-- ===== 品番マスター ===== -->
@@ -1413,8 +1415,8 @@ const planDraftDel = new Set();       // 編集中に消した注文（確定時
 const ORDER_WORK_FIELDS = ['startedAt','recId','done','doneAt','doneQty'];   // 作業の進み（編集中でも他端末の変更を取り込む）
 function planDelOrderDoc(id){ if(planEdit) planDraftDel.add(id); else delDoc('orders', id); }
 /* ===== まとめて選ぶ（チェックを付けて、まとめて削除など。「全選択」は今見えている分） ===== */
-const bulkSel = { pool:new Set(), overdue:new Set(), master:new Set(), unreg:new Set() };
-const bulkShown = { pool:[], overdue:[], master:[], unreg:[] };   // 今の画面に出ている id
+const bulkSel = { pool:new Set(), overdue:new Set(), master:new Set(), unreg:new Set(), trash:new Set() };
+const bulkShown = { pool:[], overdue:[], master:[], unreg:[], trash:[] };   // 今の画面に出ている id
 // 一覧を描くときに呼ぶ：見えなくなったものの選択は外す
 function bulkSetShown(kind, ids){
   bulkShown[kind] = ids;
@@ -1456,7 +1458,7 @@ async function bulkRun(kind, fn){
   if(!ids.length) return;
   const done = await window[fn](ids);
   if(done) bulkSel[kind].clear();
-  if(kind==='pool' || kind==='overdue') renderPlan(); else renderMaster();
+  if(kind==='pool' || kind==='overdue' || kind==='trash') renderPlan(); else renderMaster();
 }
 // 注文をまとめて消す（加工指図の注文は、次の取り込みで戻らないように覚えておく）
 function deleteOrdersBulk(ids){
@@ -1708,6 +1710,7 @@ function applySnap(kind, snap){
   });
   firstSnap[kind] = true;
   if(kind==='orders' || kind==='settings') sweepOrderTombs();   // 消したはずの注文が戻ってきていたら消し直す
+  if(kind==='settings') pruneOrderTrash();                         // 3日すぎたゴミ箱の中身を消す
   dataVer++;
   try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
   if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns && firstSnap.workdays){
@@ -1749,7 +1752,7 @@ function syncPush(){
   if(firstSnap.parts) (store.parts||[]).forEach(p=> cur['parts/'+p.id] = p);
   if(firstSnap.settings) (store.settings||[]).forEach(s=>{ if(s.id!=='orderDel') cur['settings/'+s.id] = s; });   // 消した注文の印は orderTombWrite で足していく
   const tombs = orderTombs();
-  if(firstSnap.orders && !isDemo() && !planEdit) (store.orders||[]).forEach(o=>{ if(!tombs[o.id]) cur['orders/'+o.id] = o; });   // デモ中・予定の編集中（確定前）は送らない
+  if(firstSnap.orders && !isDemo() && !planEdit) (store.orders||[]).forEach(o=>{ if(!isTombed(o, tombs)) cur['orders/'+o.id] = o; });   // デモ中・予定の編集中（確定前）は送らない
   // 追加・変更
   Object.keys(cur).forEach(k=>{
     const js = JSON.stringify(cur[k]);
@@ -1783,21 +1786,97 @@ function delDoc(kind, id, noTomb){
   else queueDel(kind, id);
 }
 
-/* 消した注文の印（settings/orderDel の ids：注文id → 消した時刻）。
-   圏外だった端末や古い版の端末が、消した注文を送り返してしまっても、見つけしだい消し直す */
+/* 消した注文の印（settings/orderDel の ids：注文id → { at:消した時刻, o:消した注文の中身 }）。
+   圏外だった端末や古い版の端末が、消した注文を送り返してしまっても、見つけしだい消し直す。
+   中身は3日間だけ残し、予定タブの「🗑️ ゴミ箱」から戻せる（3日すぎたら中身を消して印だけ残す） */
+const TRASH_DAYS = 3;
 function orderTombs(){ const d = (store.settings||[]).find(x=> x.id==='orderDel'); return (d && d.ids) || {}; }
+function tombAt(v){ return typeof v === 'string' ? v : (v && v.at) || ''; }
+// 印があって、そのあと戻されていない注文
+function isTombed(o, t){ const v = (t || orderTombs())[o.id]; return !!v && !(o.restoredAt && o.restoredAt > tombAt(v)); }
 function orderTombAdd(id){
   store.settings = store.settings || [];
   let d = store.settings.find(x=> x.id==='orderDel');
   if(!d){ d = { id:'orderDel', ids:{} }; store.settings.push(d); }
   d.ids = d.ids || {};
-  d.ids[id] = nowIso();
+  // 中身は、全端末に確定していた内容（サーバーの内容）を残す
+  let o = null; try{ o = lastSynced['orders/'+id] ? JSON.parse(lastSynced['orders/'+id]) : null; }catch(e){}
+  d.ids[id] = o ? { at: nowIso(), o } : { at: nowIso() };
   orderTombWrite(id, d.ids[id]);
 }
 // 他の端末の印を消さないよう、足す分だけを書き込む（merge）
-function orderTombWrite(id, at){
+function orderTombWrite(id, v){
   if(!fbReady || !db) return;
-  db.collection('settings').doc('orderDel').set({ id:'orderDel', ids:{ [id]: at } }, { merge:true }).catch(e=> console.warn('orderDel', e));
+  db.collection('settings').doc('orderDel').set({ id:'orderDel', ids:{ [id]: v } }, { merge:true }).catch(e=> console.warn('orderDel', e));
+}
+// 印の1件を書き換える（戻した時は消す、3日すぎたら中身を消して時刻だけにする）
+function orderTombUpdateWrite(id, v){
+  if(!fbReady || !db || !window.firebase) return;
+  const F = firebase.firestore;
+  db.collection('settings').doc('orderDel').update(new F.FieldPath('ids', id), v === undefined ? F.FieldValue.delete() : v).catch(e=> console.warn('orderDel upd', e));
+}
+// 戻した注文をすぐサーバーへ（予定の編集中でも。取り消しで消えないように）
+function orderRestoreWrite(o){
+  if(!fbReady || !db) return;
+  db.collection('orders').doc(o.id).set(JSON.parse(JSON.stringify(o))).catch(e=> console.warn('restore', e));
+  lastSynced['orders/'+o.id] = JSON.stringify(o);
+}
+// ゴミ箱の中身（3日以内に消して、中身が残っているもの）
+function trashItems(){
+  const t = orderTombs(), lim = nowMs() - TRASH_DAYS * 86400000;
+  return Object.keys(t).map(id=> ({ id, at: tombAt(t[id]), o: t[id] && t[id].o }))
+    .filter(x=> x.o && validOrder(x.o) && new Date(x.at).getTime() > lim && !store.orders.some(o=> o.id===x.id))
+    .sort((a,b)=> a.at < b.at ? 1 : -1);
+}
+// 3日すぎた中身を消す（パソコンだけが行う。同じ書き込みは1回だけ）
+const trashPruned = new Set();
+function pruneOrderTrash(){
+  if(!isPC || !firstSnap.settings) return;
+  const t = orderTombs(), lim = nowMs() - TRASH_DAYS * 86400000;
+  Object.keys(t).forEach(id=>{
+    const v = t[id];
+    if(!v || typeof v !== 'object' || !v.o || new Date(v.at).getTime() > lim || trashPruned.has(id)) return;
+    trashPruned.add(id);
+    t[id] = v.at;
+    orderTombUpdateWrite(id, v.at);
+  });
+}
+function restoreOrder(id){
+  const t = orderTombs(), v = t[id];
+  if(!v || !v.o) return null;
+  const o = JSON.parse(JSON.stringify(v.o));
+  o.restoredAt = nowIso();
+  const i = store.orders.findIndex(x=> x.id===id);
+  if(i >= 0) store.orders[i] = o; else store.orders.push(o);
+  delete t[id];
+  planDraftDel.delete(id);
+  orderTombUpdateWrite(id, undefined);
+  if(!isDemo()) orderRestoreWrite(o);
+  return o;
+}
+// 加工指図の注文を戻したら「次の取り込みで入れない」の記録からも外す
+function kakouForgetDeleted(orders){
+  const keys = new Set(orders.map(o=> o.kakouKey).filter(Boolean)), kd = appSetting().kakouDeleted || [];
+  if(kd.some(k=> keys.has(k))) setSetting('kakouDeleted', kd.filter(k=> !keys.has(k)));
+}
+function trashWhere(o){
+  if(o.machineId && o.start) return `${o.machineId} の予定（${o.start.slice(5).replace('-','/')}〜）`;
+  if(o.bucket==='overdue') return '納期超過';
+  if(o.bucket==='unreg') return '未登録の品番';
+  return 'プール';
+}
+function trashRestoreOne(id){
+  const o = restoreOrder(id); if(!o) return;
+  kakouForgetDeleted([o]);
+  save(); renderPlan();
+  toast(`${o.partNo} を戻しました（${trashWhere(o)}）`,'success');
+}
+async function trashRestoreSel(ids){
+  const back = ids.map(restoreOrder).filter(Boolean);
+  kakouForgetDeleted(back);
+  save();
+  toast(`${back.length}件を戻しました`,'success');
+  return true;
 }
 function sweepOrderTombs(){
   const t = orderTombs();
@@ -1805,7 +1884,7 @@ function sweepOrderTombs(){
   let n = 0;
   for(let i = store.orders.length - 1; i >= 0; i--){
     const id = store.orders[i].id;
-    if(!t[id]) continue;
+    if(!isTombed(store.orders[i], t)) continue;
     store.orders.splice(i, 1); n++;
     if(lastSynced['orders/'+id] !== undefined && !isDemo()) delDoc('orders', id, true);   // サーバーに戻ってきていたら消し直す
   }
@@ -4829,6 +4908,7 @@ function renderPlanPool(){
   bulkRefresh('pool');
   renderKakouInfo();
   renderPlanOverdue();
+  renderPlanTrash();
 }
 function planCardHtml(o, fit, machineId){
   const c = fit.c;
@@ -5127,9 +5207,29 @@ function renderPlanViewChips(){
   const n = overdueOrders().length;
   $('#planViewChips').innerHTML =
     `<button class="rchip${planView==='plan'?' sel':''}" onclick="setPlanView('plan')">予定</button>` +
-    `<button class="rchip od-chip${planView==='overdue'?' sel':''}" onclick="setPlanView('overdue')">納期超過<span class="n-red">${n}</span></button>`;
+    `<button class="rchip od-chip${planView==='overdue'?' sel':''}" onclick="setPlanView('overdue')">納期超過<span class="n-red">${n}</span></button>` +
+    `<button class="rchip${planView==='trash'?' sel':''}" onclick="setPlanView('trash')">🗑️ ゴミ箱<span class="n">${trashItems().length}</span></button>`;
   $('#planMainView').hidden = planView !== 'plan';
   $('#planOverdue').hidden = planView !== 'overdue';
+  $('#planTrashView').hidden = planView !== 'trash';
+}
+/* ゴミ箱：消した注文を3日間だけ残し、戻せるようにする */
+function renderPlanTrash(){
+  const el = $('#planTrashView'); if(!el) return;
+  const list = trashItems();
+  bulkSetShown('trash', list.map(x=> x.id));
+  if(!list.length){ el.innerHTML = `<div class="rec-empty-note">ゴミ箱は空です。<br>消した予定・注文は${TRASH_DAYS}日間ここに残り、「↩ 戻す」で元に戻せます。</div>`; return; }
+  const left = at=>{ const ms = new Date(at).getTime() + TRASH_DAYS * 86400000 - nowMs(), h = Math.max(0, Math.floor(ms / 3600000)); return h >= 24 ? `あと${Math.ceil(ms/86400000)}日` : `あと${h}時間`; };
+  el.innerHTML = `<div class="pool-head"><span class="t">🗑️ ゴミ箱</span><span class="s">${list.length}件・消した予定や注文は${TRASH_DAYS}日間だけ残ります（すぎると完全に消えます）</span></div>
+    ${bulkBarHtml('trash', [{ label:'選んだものを戻す', fn:'trashRestoreSel', cls:'oc-go' }])}
+    <div class="od-list">${list.map(x=>{ const o = x.o; return `<div class="od-row tr-row">
+      ${bulkCk('trash', x.id)}<div class="od-main"><b>${esc(o.partNo)}</b>　<span>${esc(o.partName || partNameOf(o.partNo) || '')}</span>
+        <div class="od-sub">${(o.qty||0).toLocaleString()}${esc(o.unit||'個')}　納期 ${esc(String(o.due||'').replace(/-/g,'/'))}　元の場所：${esc(trashWhere(o))}${o.kakouKey ? '　📄 ' + esc(o.kakouKey) : ''}</div>
+        <div class="od-sub">消した日時 ${fmtDT(x.at)}（${left(x.at)}で完全に消えます）</div>
+      </div>
+      <div class="od-btns"><button class="oc-go" onclick="trashRestoreOne('${esc(x.id)}')">↩ 戻す</button></div>
+    </div>`; }).join('')}</div>`;
+  bulkRefresh('trash');
 }
 /* 納期超過の指図（プールに入れる・変更・削除を選ぶ） */
 function renderPlanOverdue(){
@@ -5577,7 +5677,7 @@ async function planTrashDrop(e){
   planDragEnd();
   const o = store.orders.find(x=> x.id===id); if(!o) return;
   const ok = await confirmDialog('注文の削除',
-    `${o.partNo}（${o.qty.toLocaleString()}個・納期 ${String(o.due||'').replace(/-/g,'/')}）を削除します。` +
+    `${o.partNo}（${o.qty.toLocaleString()}個・納期 ${String(o.due||'').replace(/-/g,'/')}）を削除します。\n${TRASH_DAYS}日間は「🗑️ ゴミ箱」から戻せます（確定したあと）。` +
     (o.startedAt ? '\nこの予定は作業中です。削除しても、動いている日報の記録は残ります。' : ''),
     '削除する', true);
   if(!ok){ renderPlan(); return; }
@@ -5794,7 +5894,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.70';
+const APP_VERSION = '2026-06-28.71';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
