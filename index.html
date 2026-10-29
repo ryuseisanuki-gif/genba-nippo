@@ -4119,6 +4119,8 @@ function addMachine(){
   const id = $('#newMachId').value.trim();
   const name = $('#newMachName').value.trim();
   if(!id){ toast('機番を入力してください','error'); return; }
+  // 機番はデータの保存先の名前に使うので「/」などは使えない（使うとその機械の記録が保存されない）
+  if(/[\/]/.test(id) || id==='.' || id==='..' || /^__.*__$/.test(id)){ toast('機番に「/」は使えません（P-8 のように入れてください）','error'); return; }
   if(store.machines.some(m=>m.id===id)){ toast('同じ機番が登録済みです','error'); return; }
   // 登録日を残す。これより前の日は、この機械を平均や合計に含めない
   store.machines.push({id, name, since: dateKey(nowDate())});
@@ -4129,13 +4131,19 @@ function addMachine(){
 }
 async function deleteMachine(id){
   if(activeFor(id)){ toast('作業中の機械は削除できません','error'); return; }
-  const ok = await confirmDialog('機械の削除',`${id} を一覧から削除します。記録は残ります。`,'削除する',true);
+  if(planEdit){ toast('予定の編集中は機械を削除できません。予定を「確定」してからにしてください','error'); return; }
+  // この機械に入っている予定は、見えなくならないようにプールへ戻す
+  const plans = (store.orders||[]).filter(o=> o.machineId===id && !o.done);
+  const ok = await confirmDialog('機械の削除',`${id} を一覧から削除します。記録は残ります。` +
+    (plans.length ? `
+この機械に入っている予定 ${plans.length}件は、予定タブのプールに戻します。` : ''),'削除する',true);
   if(!ok) return;
+  plans.forEach(o=>{ o.machineId = null; o.start = null; o.startFrac = 0; o.startedAt = null; o.recId = null; });
   store.machines = store.machines.filter(m=>m.id!==id);
   delDoc('machines', id);
   if(selectedMachineId===id) selectedMachineId=null;
   save(); renderMachineSettings(); renderMachineGrid(); renderStatus();
-  toast('削除しました');
+  toast(plans.length ? `削除しました（予定 ${plans.length}件をプールに戻しました）` : '削除しました');
 }
 /* ===== 品番マスター（タブ） ===== */
 let masterFilter = '';
@@ -5917,7 +5925,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.73';
+const APP_VERSION = '2026-06-28.74';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
