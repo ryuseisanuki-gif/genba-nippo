@@ -648,6 +648,7 @@
   .sheet-actions{display:flex;gap:10px;margin-top:18px;}
   .sheet-actions button{flex:1;min-height:52px;border-radius:13px;font-size:15px;font-weight:700;}
   .b-cancel{background:var(--surface2);border:1px solid var(--line);color:var(--ink2);}
+  .b-cancel.cf-alt{color:var(--stop);border-color:var(--stop);background:#fff;}   /* 「破棄して移る」 */
   .b-ok{background:var(--run);color:#fff;}
   .b-ok:active{background:var(--run-d);}
   .b-ok.danger{background:var(--stop);}
@@ -1206,6 +1207,7 @@
     <p id="cfMsg"></p>
     <div class="sheet-actions">
       <button class="b-cancel" id="cfCancel">キャンセル</button>
+      <button class="b-cancel cf-alt" id="cfAlt" hidden></button>
       <button class="b-ok" id="cfOk">OK</button>
     </div>
   </div>
@@ -2087,8 +2089,19 @@ function confirmDialog(title, msg, okLabel='OK', danger=false){
     ok.className = 'b-ok' + (danger?' danger':'');
     ok.onclick = ()=>resolveConfirm(true);
     cancel.onclick = ()=>resolveConfirm(false);
+    cancel.textContent = 'キャンセル';
+    $('#cfAlt').hidden = true;
     $('#confirmSheet').classList.add('active');
   });
+}
+// 3つから選ぶ確認。'ok'（右）／'alt'（まん中）／'cancel'（左・背景タップ・Esc）
+function choiceDialog(title, msg, okLabel, altLabel, cancelLabel){
+  const p = confirmDialog(title, msg, okLabel);
+  const alt = $('#cfAlt');
+  alt.textContent = altLabel; alt.hidden = false;
+  alt.onclick = ()=>resolveConfirm('alt');
+  $('#cfCancel').textContent = cancelLabel || 'キャンセル';
+  return p.then(v=> v===true ? 'ok' : v==='alt' ? 'alt' : 'cancel');
 }
 function resolveConfirm(v){
   $('#confirmSheet').classList.remove('active');
@@ -2099,10 +2112,16 @@ function resolveConfirm(v){
 /* ===== TABS ===== */
 document.querySelectorAll('.tab').forEach(t=>{
   t.onclick = async ()=>{
-    // 予定の編集中に別のタブへ移るときは、確定するか聞く（確定しないと他の端末に出ず、閉じると消える）
+    // 予定の編集中に別のタブへ移るときは、確定するか破棄するかを聞く（変更が無ければそのまま編集を終える）
     if(planEdit && t.dataset.tab!=='plan' && $('#page-plan').classList.contains('active')){
-      const ok = await confirmDialog('予定の編集中です', '予定の変更はまだ確定していません。確定しないまま閉じると、変更（削除を含む）は元に戻ります。\n今すぐ確定しますか？', '✓ 確定する');
-      if(ok) planCommitEdit();
+      if(!planIsDirty()){ planEdit = false; planDraftDel.clear(); save(); renderPlanEditBar(); }
+      else {
+        const c = await choiceDialog('予定の編集を確定していません',
+          '確定していない変更があります。\n「確定して移る」：変更を全端末に反映します。\n「破棄して移る」：変更を取り消して、確定済みの予定に戻します。',
+          '✓ 確定して移る', '破棄して移る', '編集に戻る');
+        if(c==='cancel') return;                // 編集に戻る（予定タブのまま）
+        if(c==='ok') planCommitEdit(); else await planDiscardEdit();
+      }
     }
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
     document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
@@ -5387,6 +5406,21 @@ function planCommitEdit(){
 async function planCancelEdit(){
   const ok = await confirmDialog('編集を取り消す', '確定していない変更をすべて元に戻します。よろしいですか？', '取り消す', true);
   if(!ok) return;
+  await planDiscardEdit();
+}
+// 確定していない変更があるか（自分で動かした・足した・消した注文。他の端末から届いた作業の進みは数えない）
+function canonJson(o){ return JSON.stringify(o, Object.keys(o).sort()); }
+function planIsDirty(){
+  if(!planEdit) return false;
+  if(planDraftDel.size) return true;
+  return (store.orders||[]).some(o=>{
+    const js = lastSynced['orders/'+o.id];
+    if(js === undefined) return true;                           // 編集中に足した注文
+    try{ return canonJson(JSON.parse(js)) !== canonJson(o); }catch(e){ return true; }
+  });
+}
+// 編集を破棄して、確定済みの内容に戻す（確認なし）
+async function planDiscardEdit(){
   planEdit = false; planDraftDel.clear();
   if(!isDemo() && fbReady && db){
     try{   // 確定済みの内容をサーバーから取り直す
@@ -5404,7 +5438,7 @@ async function planCancelEdit(){
   toast('変更を取り消しました');
 }
 // 編集中に画面を閉じようとしたら止める（確定していない変更が消えるため）
-window.addEventListener('beforeunload', e=>{ if(planEdit){ e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', e=>{ if(planIsDirty()){ e.preventDefault(); e.returnValue = ''; } });
 // ◀▶：前・次の月の1日へスクロール（表示の範囲が足りなければ広げる）
 function planMonthMove(k){
   const t = new Date(planMonth.getFullYear(), planMonth.getMonth() + k, 1), now = nowDate();
@@ -5925,7 +5959,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.74';
+const APP_VERSION = '2026-06-28.75';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
