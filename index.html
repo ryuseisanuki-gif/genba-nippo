@@ -1715,6 +1715,7 @@ function applySnap(kind, snap){
   try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
   if(!initialSyncDone && firstSnap.machines && firstSnap.records && firstSnap.coils && firstSnap.shutdowns && firstSnap.workdays){
     initialSyncDone = true;
+    setTimeout(tickBoundaries, 0);   // 開いてすぐ、休憩明け・始業・終業の反映をする（30秒待たない）
     enableAutoCreate();   // 全端末のデータが揃ってから自動記録を作る（二重作成の防止）
     syncPush();           // 先に未送信ぶんをサーバーへ送り切る
     if(pruneOldRecords()){ try{ localStorage.setItem(KEY, storeJson()); }catch(e){} }  // その後で古い分を手放す
@@ -1955,6 +1956,24 @@ function activeFor(id){ return pickRec(store.records.filter(r=>r.machineId===id 
 function openStop(r){ return r && r.stops ? r.stops.find(s=>!s.to) : null; }
 function openStops(r){ return (r && r.stops) ? r.stops.filter(s=>!s.to) : []; }
 function closeAllOpenStops(r, iso){ let n=0; openStops(r).forEach(s=>{ s.to = iso; n++; }); return n; }
+// 休憩の停止なら、その休憩の終わる時刻（12:45・15:15 など）。休憩でなければ null
+function breakEndOf(st){
+  if(!st || st.reason!=='休憩' || !st.from) return null;
+  const f = new Date(st.from);
+  for(const b of BREAKS){
+    const bs = atHour(f, b.sh, b.sm).getTime(), be = atHour(f, b.eh, b.em).getTime();
+    if(f.getTime() >= bs && f.getTime() < be) return be;
+  }
+  return null;
+}
+// 開いている停止を閉じる。休憩の停止は、休憩がもう終わっていれば休憩の終わる時刻で閉じる
+//（昼休み明けにアプリを開いて「再開」を押した時、押した時刻まで止まっていたことにならないように）
+function closeOpenStopsAt(r, iso){
+  const t = new Date(iso).getTime();
+  let n = 0;
+  openStops(r).forEach(st=>{ const be = breakEndOf(st); st.to = (be !== null && be < t) ? new Date(be).toISOString() : iso; n++; });
+  return n;
+}
 // 「稼働中なのに閉じ忘れの停止が残っている」記録を自動で直す。
 // 複数端末が同時に停止/再開を押すと発生し、放置すると稼働率が下がり続ける。
 // 個数を入れた日が「未入力」の印に残っていたら消す（古い版の取りこぼしを直す）
@@ -2020,7 +2039,7 @@ function healOpenStops(){
   let fixed = 0;
   store.records.forEach(r=>{
     if(r.status!=='running') return;      // 停止中の記録は開いていて当然
-    fixed += closeAllOpenStops(r, nowIso);
+    fixed += closeOpenStopsAt(r, nowIso);
   });
   if(fixed) save();
   return fixed;
@@ -2609,7 +2628,7 @@ function resumeJob(){
   if(!r) return;
   // 開いている停止は「全部」閉じる。1つだけ閉じると、他端末が同時に作った停止が
   // 取り残されて「稼働中なのに止まっている」状態が続いてしまう
-  closeAllOpenStops(r, nowDate().toISOString());
+  closeOpenStopsAt(r, nowDate().toISOString());
   r.status = 'running';
   save();
   toast('作業を再開しました','success');
@@ -5894,7 +5913,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.71';
+const APP_VERSION = '2026-06-28.72';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
