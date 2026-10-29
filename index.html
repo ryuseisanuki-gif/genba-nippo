@@ -2431,7 +2431,11 @@ function manualResume(){
   const r = shownWith('overnight');
   if(!r) return;
   r.status = 'running';
-  r.sessionStart = nowDate().toISOString();
+  // 始業時刻を過ぎてから押した時は、始業時刻からの再開にする（自動の再開と同じ。押すまでが停止扱いにならないように）
+  //（朝8:45にアプリを開いている端末が無いと自動で再開されず、開いてすぐ押すと押した時刻になっていた）
+  const now = nowDate(), st = stdStart(now);
+  const base = r.overnightDate || (r.pendingDates||[])[0] || (r.lastRunEnd ? dateKey(new Date(r.lastRunEnd)) : '');
+  r.sessionStart = (now.getTime() >= st.getTime() && base && base < dateKey(now) && !offDay(now)) ? st.toISOString() : now.toISOString();
   r.lastRunEnd = null;
   r.pendingCount = false;
   delete r.overnightDate;
@@ -5913,7 +5917,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.72';
+const APP_VERSION = '2026-06-28.73';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
