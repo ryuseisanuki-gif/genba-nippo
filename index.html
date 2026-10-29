@@ -648,7 +648,7 @@
   .sheet-actions{display:flex;gap:10px;margin-top:18px;}
   .sheet-actions button{flex:1;min-height:52px;border-radius:13px;font-size:15px;font-weight:700;}
   .b-cancel{background:var(--surface2);border:1px solid var(--line);color:var(--ink2);}
-  .b-cancel.cf-alt{color:var(--stop);border-color:var(--stop);background:#fff;}   /* 「破棄して移る」 */
+  .b-cancel.cf-alt{color:var(--stop);border-color:var(--stop);background:#fff;}   /* 「編集を破棄」 */
   .b-ok{background:var(--run);color:#fff;}
   .b-ok:active{background:var(--run-d);}
   .b-ok.danger{background:var(--stop);}
@@ -2117,8 +2117,8 @@ document.querySelectorAll('.tab').forEach(t=>{
       if(!planIsDirty()){ planEdit = false; planDraftDel.clear(); save(); renderPlanEditBar(); }
       else {
         const c = await choiceDialog('予定の編集を確定していません',
-          '確定していない変更があります。\n「確定して移る」：変更を全端末に反映します。\n「破棄して移る」：変更を取り消して、確定済みの予定に戻します。',
-          '✓ 確定して移る', '破棄して移る', '編集に戻る');
+          '確定していない変更があります。\n「編集を確定」：変更を全端末に反映して移ります。\n「編集を破棄」：変更を取り消して、確定済みの予定に戻して移ります。',
+          '✓ 編集を確定', '編集を破棄', '編集に戻る');
         if(c==='cancel') return;                // 編集に戻る（予定タブのまま）
         if(c==='ok') planCommitEdit(); else await planDiscardEdit();
       }
@@ -5959,7 +5959,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.75';
+const APP_VERSION = '2026-06-28.76';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
