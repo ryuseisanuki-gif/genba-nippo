@@ -624,6 +624,7 @@
   /* ── Generic modal (end qty / confirm) ── */
   .ov{display:none;position:fixed;inset:0;background:rgba(15,22,33,.55);z-index:210;align-items:flex-end;justify-content:center;}
   .ov.active{display:flex;}
+  #confirmSheet{z-index:220;}   /* 入力画面の上に確認を重ねて出す */
   .sheet{
     background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:620px;
     padding:8px 18px calc(26px + var(--safe-b));animation:up .22s ease-out;
@@ -5936,9 +5937,35 @@ async function osDelete(){
 function clockTick(){ $('#clock').textContent = fmtClock(nowDate()); }
 
 /* ===== UNIVERSAL MODAL DISMISS (tap background / Esc) ===== */
-function closeAnyOverlay(ov){
+// 入力画面を開いた時の入力内容を覚えておき、外側タップ・Esc で閉じる時に変わっていたら確認する
+//（指が画面の端に当たっただけで、入力中の個数や注文が消えないように）
+const ovSnap = new Map();
+function ovValues(ov){
+  return [...ov.querySelectorAll('input,textarea,select')]
+    .filter(el=> el.type!=='hidden' && el.type!=='file')
+    .map(el=> (el.type==='checkbox' || el.type==='radio') ? (el.checked ? '1' : '0') : el.value).join('\u0001');
+}
+function watchOverlayInputs(){
+  const mo = new MutationObserver(ms=> ms.forEach(m=>{
+    const ov = m.target;
+    if(ov.classList.contains('active')){ if(!ovSnap.has(ov.id)) ovSnap.set(ov.id, ovValues(ov)); }
+    else ovSnap.delete(ov.id);
+  }));
+  document.querySelectorAll('.ov').forEach(ov=>{ if(ov.id !== 'confirmSheet') mo.observe(ov, { attributes:true, attributeFilter:['class'] }); });
+}
+let ovAsking = false;
+async function closeAnyOverlay(ov){
   if(!ov) return;
   if(ov.id === 'confirmSheet'){ resolveConfirm(false); return; }
+  if(ovSnap.has(ov.id) && ovSnap.get(ov.id) !== ovValues(ov)){
+    if(ovAsking) return;
+    ovAsking = true;
+    const p = confirmDialog('入力中の内容があります', '入力した内容はまだ保存されていません。\n破棄して閉じますか？', '破棄する', true);
+    $('#cfCancel').textContent = '入力に戻る';
+    const ok = await p;
+    ovAsking = false;
+    if(!ok) return;                     // 入力に戻る
+  }
   if(ov.id === 'endSheet'){ closeEndSheet(); return; }
   if(ov.id === 'stopSheet'){ closeStopSheet(); return; }
   if(ov.id === 'carrySheet'){ closeCarry(); return; }
@@ -5951,7 +5978,7 @@ function setupOverlayDismiss(){
   // camera modal: tapping its dark edges does nothing destructive; leave its ✕ button
   document.addEventListener('keydown', e=>{
     if(e.key !== 'Escape') return;
-    const open = document.querySelector('.ov.active');
+    const open = $('#confirmSheet.active') || document.querySelector('.ov.active');   // 確認が重なっていたら確認を先に閉じる
     if(open){ closeAnyOverlay(open); return; }
     if($('#scanModal').classList.contains('active')) closeScanner();
   });
@@ -5959,7 +5986,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.76';
+const APP_VERSION = '2026-06-28.77';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -6055,6 +6082,7 @@ function init(){
   processBreaks();                 // 休憩(12:00-12:45 / 15:00-15:15)の自動停止/再開をキャッチアップ
   processAutoDaily();              // 自動記録（9:00開始/17:00終了）をキャッチアップ
   setupOverlayDismiss();
+  watchOverlayInputs();
   renderMachineGrid();
   renderScanned();
   renderStatus();
