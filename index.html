@@ -1652,7 +1652,7 @@ function attachListeners(){
     });
   // 直近の窓から外れていても「作業中／持ち越し」の記録は必ず読む（機械が空きに見えるのを防ぐ）
   db.collection('records').where('status','in',['running','stopped','overnight'])
-    .onSnapshot(s=>applySnap('records', s), e=>console.warn('active listen', e));
+    .onSnapshot(s=>applySnap('records', s, 'active'), e=>console.warn('active listen', e));
   db.collection('coils').onSnapshot(s=>applySnap('coils', s), e=>{ console.warn('coils listen', e); setSyncStatus('offline'); });
   db.collection('shutdowns').onSnapshot(s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
   db.collection('workdays').onSnapshot(s=>applySnap('workdays', s), e=>{ console.warn('workdays listen', e); setSyncStatus('offline'); });
@@ -1685,7 +1685,7 @@ function reconcileFirstSnap(kind, snap){
   const fresh = x=>{ const t = new Date(x.createdAt || x.at || 0).getTime(); return t > 0 && (rawNowMs() - t) < 30*60000; };
   for(let i = list.length - 1; i >= 0; i--){ if(!ids.has(list[i].id) && !fresh(list[i])) list.splice(i, 1); }
 }
-function applySnap(kind, snap){
+function applySnap(kind, snap, src){
   if(!firstSnap[kind] && RECONCILE_KINDS.includes(kind)) reconcileFirstSnap(kind, snap);
   if(kind==='orders' && planEdit){
     // 編集中：他の端末からの変更は、作業の進み（開始・完了）と新しい注文だけ取り込む。並びは編集中の内容を残す
@@ -1707,6 +1707,10 @@ function applySnap(kind, snap){
   const arr = kind==='machines' ? store.machines : kind==='coils' ? store.coils : kind==='shutdowns' ? store.shutdowns : kind==='workdays' ? store.workdays : kind==='orders' ? store.orders : kind==='parts' ? store.parts : kind==='settings' ? store.settings : store.records;
   snap.docChanges().forEach(ch=>{
     const id = ch.doc.id, data = ch.doc.data();
+    // 「作業中の記録」の監視から外れた＝終了などで状態が変わっただけ（消えたのではない）。手元から消さずに読み直す
+    //（前は消していたので、終わった作業がその端末の集計から抜けることがあった）
+    if(ch.type==='removed' && src==='active'){ recheckRecord(id); return; }
+    if(kind==='records' && !ch.doc.metadata.hasPendingWrites) recSeen.add(id);
     const i = arr.findIndex(x=>x.id===id);
     if(ch.type==='removed'){ if(i>=0) arr.splice(i,1); delete lastSynced[kind+'/'+id]; }
     else { if(i>=0) arr[i] = data; else arr.push(data); lastSynced[kind+'/'+id] = JSON.stringify(data); }
@@ -1759,9 +1763,16 @@ function syncPush(){
   if(firstSnap.orders && !isDemo() && !planEdit) (store.orders||[]).forEach(o=>{ if(!isTombed(o, tombs)) cur['orders/'+o.id] = o; });   // デモ中・予定の編集中（確定前）は送らない
   // 追加・変更
   Object.keys(cur).forEach(k=>{
-    const js = JSON.stringify(cur[k]);
+    let js = JSON.stringify(cur[k]);
     if(lastSynced[k] !== js){
       const [c,id] = splitKey(k);
+      if(c === 'records'){
+        cur[k].savedAt = nowIso(); js = JSON.stringify(cur[k]);   // いつ保存したか（他の端末とぶつかった時に「○時○分に保存」と出す）
+        const base = lastSynced[k];
+        lastSynced[k] = js;
+        pushRecordWrite(id, js, base);
+        return;
+      }
       db.collection(c).doc(id).set(JSON.parse(js)).catch(e=>console.warn('push', k, e));
       lastSynced[k] = js;
     }
@@ -1790,6 +1801,186 @@ function delDoc(kind, id, noTomb){
   else queueDel(kind, id);
 }
 
+/* ===== 記録の取り違え防止 =====
+   ① ボタンを押したら、まずサーバーから最新の記録を読み込んでから操作する（freshRecords）
+   ② 記録を送るときは、サーバーの今の内容とこの端末が最後に知っていた内容を比べ、変わっていたら
+      この端末で変えた所だけを足して保存する（古い内容の端末が、他の端末の変更を消さないように）
+   ③ 入力画面を開いている間に同じ所が他の端末で変わったら、いつ・何が違うかを出して選んでもらう */
+const recSeen = new Set();        // サーバーにあると確かめた記録（作ったばかりで届いていない記録と区別する）
+const recPushChain = {};          // 同じ記録の送信は順番に（前の送信が終わってから次を送る）
+const recInFlight = {};           // 送っている最中の記録（届く前のサーバーの内容で、手元を戻さないように）
+function withTimeout(p, ms){ return Promise.race([p, new Promise((_, rej)=> setTimeout(()=> rej(new Error('timeout')), ms))]); }
+// サーバーの記録を手元に入れる。この端末でまだ送っていない変更があるときは入れない（送るときに合わせる）
+function applyServerRecord(id, data){
+  if(recInFlight[id] > 0) return 0;
+  const k = 'records/'+id, i = store.records.findIndex(x=> x.id===id);
+  if(!data){
+    if(i >= 0 && recSeen.has(id)){ store.records.splice(i, 1); delete lastSynced[k]; return 1; }   // 他の端末で削除された
+    return 0;
+  }
+  recSeen.add(id);
+  const local = i >= 0 ? store.records[i] : null;
+  if(local && lastSynced[k] !== undefined && JSON.stringify(local) !== lastSynced[k]) return 0;
+  const js = JSON.stringify(data);
+  if(local && canonJson(local) === canonJson(data)){ lastSynced[k] = js; return 0; }
+  if(i >= 0) store.records[i] = data; else store.records.push(data);
+  lastSynced[k] = js;
+  return 1;
+}
+function recheckRecord(id){
+  if(!fbReady || !db) return;
+  db.collection('records').doc(id).get().then(d=>{
+    if(applyServerRecord(id, d.exists ? d.data() : null)){ dataVer++; try{ localStorage.setItem(KEY, storeJson()); }catch(e){} refreshActiveViews(); }
+  }).catch(e=> console.warn('recheck', id, e));
+}
+// 最新の記録を読み込む（その機械の作業中の記録＋指定の記録）。読めなければ（圏外など）手元のまま
+async function freshRecords(machineId, ids){
+  if(!fbReady || !db || navigator.onLine === false) return false;
+  const want = new Set(ids || []);
+  store.records.forEach(r=>{ if((!machineId || r.machineId===machineId) && ['running','stopped','overnight'].includes(r.status)) want.add(r.id); });
+  try{
+    const res = await withTimeout(Promise.all(
+      [db.collection('records').where('status','in',['running','stopped','overnight']).get({ source:'server' })]
+        .concat([...want].map(id=> db.collection('records').doc(id).get({ source:'server' })))), 3000);
+    const docs = new Map();
+    res[0].docs.forEach(d=> docs.set(d.id, d.data()));
+    res.slice(1).forEach(d=> docs.set(d.id, d.exists ? d.data() : null));
+    let n = 0;
+    docs.forEach((data, id)=>{ n += applyServerRecord(id, data); });
+    if(n){ dataVer++; try{ localStorage.setItem(KEY, storeJson()); }catch(e){} refreshActiveViews(); }
+    return true;
+  }catch(e){ console.warn('fresh', e); return false; }
+}
+// 2つの一覧を合わせる：サーバーの一覧に、この端末で足した・変えた・消した分だけを反映する
+function mergeList(b, m, sv, key){
+  b = b || []; m = m || []; sv = sv || [];
+  const bm = new Map(b.map(x=> [key(x), x])), mm = new Map(m.map(x=> [key(x), x]));
+  let out = sv.map(x=> x);
+  bm.forEach((x, k)=>{ if(!mm.has(k)) out = out.filter(y=> key(y) !== k); });           // この端末で消した
+  mm.forEach((x, k)=>{
+    const bx = bm.get(k);
+    if(bx && canonJson(bx) === canonJson(x)) return;                                    // この端末では変えていない
+    const j = out.findIndex(y=> key(y) === k);
+    if(j >= 0) out[j] = x; else out.push(x);                                            // この端末で変えた・足した
+  });
+  return out;
+}
+function mergeRecord(base, mine, server){
+  // 他の端末で終わっていた記録は、この端末の（古い内容からの）変更では動かさない
+  if(server.status === 'done' && base.status !== 'done' && mine.status !== 'done') return server;
+  const out = JSON.parse(JSON.stringify(server));
+  const keys = new Set([...Object.keys(base), ...Object.keys(mine)]);
+  keys.forEach(k=>{
+    if(['stops','dailyCounts','pendingDates','savedAt'].includes(k)) return;
+    if(canonJson(mine[k]) === canonJson(base[k])) return;
+    if(k in mine) out[k] = mine[k]; else delete out[k];
+  });
+  out.stops = mergeList(base.stops, mine.stops, server.stops, x=> (x.reason||'') + '|' + x.from);
+  out.dailyCounts = mergeList(base.dailyCounts, mine.dailyCounts, server.dailyCounts, x=> (x.date||'') + '|' + (x.at||''));
+  const pb = new Set(base.pendingDates||[]), pm = new Set(mine.pendingDates||[]);
+  const pd = new Set(server.pendingDates||[]);
+  pm.forEach(d=>{ if(!pb.has(d)) pd.add(d); }); pb.forEach(d=>{ if(!pm.has(d)) pd.delete(d); });
+  out.pendingDates = [...pd].sort();
+  if(out.status === 'done' && (out.dailyCounts||[]).length) out.qty = recordTotalQty(out);
+  out.savedAt = mine.savedAt;
+  return out;
+}
+// 送る内容を決める（サーバーの今の内容 server と、この端末が最後に知っていた内容 base を比べる）
+function recordTxnPlan(baseJs, mineJs, server, seen){
+  const mine = JSON.parse(mineJs);
+  if(!server) return seen ? { write:false, deleted:true } : { write:true, doc:mine };   // 届く前の新しい記録は作る／削除された記録は作り直さない
+  if(baseJs === undefined) return { write:true, doc:mine };
+  const base = JSON.parse(baseJs);
+  if(canonJson(server) === canonJson(base)) return { write:true, doc:mine };              // だれも変えていない
+  const doc = mergeRecord(base, mine, server);
+  return { write: canonJson(doc) !== canonJson(server), doc, merged:true };
+}
+function afterRecordPush(id, mineJs, plan){
+  const k = 'records/'+id, i = store.records.findIndex(x=> x.id===id);
+  if(plan.deleted){ if(i >= 0) store.records.splice(i, 1); delete lastSynced[k]; dataVer++; refreshActiveViews(); return; }
+  if(!plan.merged) return;
+  // 合わせた内容を手元にも入れる（送ったあと手元でさらに変えていなければ）
+  if(i >= 0 && JSON.stringify(store.records[i]) === mineJs){
+    store.records[i] = plan.doc; lastSynced[k] = JSON.stringify(plan.doc);
+    dataVer++; try{ localStorage.setItem(KEY, storeJson()); }catch(e){} refreshActiveViews();
+  }
+}
+function pushRecordWrite(id, mineJs, baseJs){
+  if(!fbReady || !db) return;
+  const ref = db.collection('records').doc(id);
+  const run = ()=>{
+    // 圏外のときは今までどおり（つながったら送られる）
+    if(navigator.onLine === false || !window.firebase) return ref.set(JSON.parse(mineJs)).catch(e=> console.warn('push', id, e));
+    const seen = recSeen.has(id);
+    return db.runTransaction(tx=> tx.get(ref).then(snap=>{
+      const plan = recordTxnPlan(baseJs, mineJs, snap.exists ? snap.data() : null, seen);
+      if(plan.write) tx.set(ref, plan.doc);
+      return plan;
+    })).then(plan=> afterRecordPush(id, mineJs, plan)).catch(e=>{
+      console.warn('push txn', id, e);
+      if(e && (e.code === 'unavailable' || e.code === 'deadline-exceeded')) return ref.set(JSON.parse(mineJs)).catch(()=>{});
+      delete lastSynced['records/'+id];   // 次の保存でもう一度送る
+    });
+  };
+  recInFlight[id] = (recInFlight[id] || 0) + 1;
+  recPushChain[id] = (recPushChain[id] || Promise.resolve()).then(run, run).finally(()=>{ recInFlight[id] = Math.max(0, (recInFlight[id] || 1) - 1); });
+}
+// ボタンを押した時：最新を読み込み、押した時と状態が変わっていたら（他の端末で操作済み）知らせて止める
+let freshBusy = false;
+async function freshShown(expect){
+  const before = shownRec(), mid = selectedMachineId;
+  if(!before || (expect && before.status !== expect)) return true;   // 元の処理に任せる
+  if(freshBusy) return false;
+  freshBusy = true;
+  try{ await freshRecords(mid, [before.id]); } finally { freshBusy = false; }
+  const now = store.records.find(x=> x.id===before.id), shown = shownRec();
+  if(now && now.status === before.status && shown && shown.id === before.id) return true;
+  toast(changedMsg(mid, now), 'error');
+  refreshActiveViews();
+  return false;
+}
+function stLabel(st){ return st==='done' ? '終了' : st==='stopped' ? '停止中' : st==='running' ? '稼働中' : st==='overnight' ? '本日終了（持ち越し）' : (st||'—'); }
+function changedMsg(mid, r){
+  if(!r) return `${mid} の作業は他の端末で削除されています。画面を最新にしました`;
+  const when = r.savedAt ? fmtT(r.savedAt) + ' に' : '';
+  return `${mid} は ${when}他の端末で「${stLabel(r.status)}」になっています。画面を最新にしました`;
+}
+// 入力画面を開いた時の記録を覚えておく
+const sheetBase = {};
+function rememberRec(key, r){ sheetBase[key] = r ? JSON.parse(JSON.stringify(r)) : null; }
+function rememberRecById(key, id){ rememberRec(key, store.records.find(x=> x.id===id)); }
+// 開いた時から変わったところ（画面に出す文）
+function recDiffLines(a, c){
+  const L = [];
+  if(a.status !== c.status) L.push(`状態：${stLabel(c.status)}`);
+  if((a.endTime||'') !== (c.endTime||'') && c.endTime) L.push(`終了：${fmtDT(c.endTime)}`);
+  const key = x=> (x.date||'') + '|' + (x.at||'');
+  const ad = new Map((a.dailyCounts||[]).map(x=> [key(x), x]));
+  (c.dailyCounts||[]).forEach(x=>{ if(!ad.has(key(x)) || canonJson(ad.get(key(x))) !== canonJson(x)) L.push(`個数（${(x.date||'').slice(5).replace('-','/')}）：${(x.qty||0).toLocaleString()}個`); });
+  const sk = x=> (x.reason||'') + '|' + x.from;
+  const as = new Map((a.stops||[]).map(x=> [sk(x), x])), cs = new Map((c.stops||[]).map(x=> [sk(x), x]));
+  cs.forEach((x, k)=>{ if(!as.has(k) || canonJson(as.get(k)) !== canonJson(x)) L.push(`停止：${x.reason||'停止'} ${fmtT(x.from)}〜${x.to ? fmtT(x.to) : '継続中'}`); });
+  as.forEach((x, k)=>{ if(!cs.has(k)) L.push(`停止：${x.reason||'停止'} ${fmtT(x.from)}〜 が消されています`); });
+  return L.slice(0, 6);
+}
+// 保存の前に最新を読み込み、この入力に関わる所が他の端末で変わっていたら、いつ・何が違うかを出して選んでもらう
+async function checkRecConflict(key, id, isSame, mineLine){
+  const base = sheetBase[key];
+  await freshRecords(null, [id]);
+  const cur = store.records.find(x=> x.id===id);
+  if(!cur){ await confirmDialog('他の端末で削除されています', 'この記録は他の端末で削除されています。画面を最新にしました。', 'OK'); refreshActiveViews(); return { ok:false }; }
+  if(!base || isSame(base, cur)) return { ok:true, cur };
+  const when = cur.savedAt ? fmtDT(cur.savedAt) : '少し前';
+  const lines = recDiffLines(base, cur);
+  const p = confirmDialog('他の端末で先に変更されています',
+    `${cur.machineId} の記録は ${when} に別の端末で保存されています。\n\n違うところ：\n${(lines.length ? lines : ['（記録の内容）']).map(l=> '・' + l).join('\n')}` + (mineLine ? `\n\nこの端末の入力：${mineLine}` : ''),
+    'このまま上書き', true);
+  $('#cfCancel').textContent = '最新を読み込む';
+  if(!(await p)){ refreshActiveViews(); toast('最新の内容にしました。確かめてから、もう一度操作してください'); return { ok:false }; }
+  const ok2 = await confirmDialog('本当に上書きしますか？', '先に保存された内容のうち「違うところ」が、この端末の入力で置き換わります。', '上書きする', true);
+  if(!ok2){ refreshActiveViews(); return { ok:false }; }
+  return { ok:true, cur, overwrite:true };
+}
 /* 消した注文の印（settings/orderDel の ids：注文id → { at:消した時刻, o:消した注文の中身 }）。
    圏外だった端末や古い版の端末が、消した注文を送り返してしまっても、見つけしだい消し直す。
    中身は3日間だけ残し、予定タブの「🗑️ ゴミ箱」から戻せる（3日すぎたら中身を消して印だけ残す） */
@@ -2447,7 +2638,8 @@ function renderStatus(){
     </div>`;
 }
 
-function manualResume(){
+async function manualResume(){
+  if(!(await freshShown('overnight'))) return;
   const r = shownWith('overnight');
   if(!r) return;
   r.status = 'running';
@@ -2504,7 +2696,9 @@ let startBusy = false;   // 開始ボタンの二度押し防止（確認の最�
 async function startJob(orderId){
   if(startBusy) return;
   startBusy = true;
-  setTimeout(()=>{ startBusy = false; }, 800);
+  try{ await startJobInner(orderId); } finally { setTimeout(()=>{ startBusy = false; }, 800); }
+}
+async function startJobInner(orderId){
   if(!selectedMachineId){ toast('機械を選んでください','error'); return; }
   if(!scan.partNo){ toast('バーコードを読み取ってください','error'); return; }
   // 休止期間の機械はうっかり開始しないように確認する
@@ -2514,6 +2708,7 @@ async function startJob(orderId){
       `${selectedMachineId} は休止期間${sd.label?'（'+sd.label+'）':''}（${sd.from.replace(/-/g,'/')}〜${sd.to.replace(/-/g,'/')}）です。それでも作業を開始しますか？`, '開始する');
     if(!ok) return;
   }
+  await freshRecords(selectedMachineId);   // 他の端末で始めた・終えた作業を先に読み込む
   // 前の作業が残っていたら、終了してから始める（個数はあとで入力できるので止まらない）
   const prev = activeFor(selectedMachineId);
   if(prev){
@@ -2555,6 +2750,7 @@ async function startJob(orderId){
   renderCoilSelect();
 }
 
+let endBusy = false;
 /* ===== STOP / RESUME ===== */
 function selStopChip(el){
   document.querySelectorAll('#stopChips .chip').forEach(c=>c.classList.remove('sel'));
@@ -2590,7 +2786,8 @@ function topStopReason(machineId){
   return top ? top[0] : 'コイル交換';
 }
 /* ワンタップ停止：理由を選ばずにその場で停止する */
-function quickStop(){
+async function quickStop(){
+  if(!(await freshShown('running'))) return;
   const run = shownRunning();
   if(!run) return;
   const reason = topStopReason(run.machineId);
@@ -2625,7 +2822,9 @@ function openStopSheet(){
   $('#stopSheet').classList.add('active');
 }
 function closeStopSheet(){ $('#stopSheet').classList.remove('active'); }
-function confirmStop(){
+async function confirmStop(){
+  if(!document.querySelector('#stopChips .chip.sel')){ toast('停止の理由を選んでください','error'); return; }
+  if(!(await freshShown('running'))){ closeStopSheet(); return; }
   const run = shownRunning();
   if(!run){ closeStopSheet(); return; }
   const chip = document.querySelector('#stopChips .chip.sel');
@@ -2647,7 +2846,8 @@ function confirmStop(){
   renderStatus();
   renderCoilSelect();
 }
-function resumeJob(){
+async function resumeJob(){
+  if(!(await freshShown('stopped'))) return;
   const r = shownWith('stopped');
   if(!r) return;
   // 開いている停止は「全部」閉じる。1つだけ閉じると、他端末が同時に作った停止が
@@ -2961,6 +3161,7 @@ function pendingCarryRecords(){ return store.records.filter(r=> r.pendingCount &
 let carryRecordId = null;
 function openCarrySheet(r){
   carryRecordId = r.id;
+  rememberRec('carry', r);
   const dlabel = r.overnightDate ? r.overnightDate.replace(/-/g,'/') : '';
   $('#carryMsg').textContent = `${stdEndLabel(new Date(r.lastRunEnd||nowMs()))}を過ぎたため ${r.machineId} は本日終了になりました。本日のカウンター数（この日の生産個数）を入力してください。`;
   const prior = (r.dailyCounts||[]).reduce((s,d)=>s+(d.qty||0),0);
@@ -3009,13 +3210,18 @@ function closeCarry(){
   carryRecordId = null;
   renderStatus();
 }
-function submitCarry(action){
-  const r = store.records.find(x=>x.id===carryRecordId);
-  if(!r){ $('#carrySheet').classList.remove('active'); return; }
+async function submitCarry(action){
+  const r0 = store.records.find(x=>x.id===carryRecordId);
+  if(!r0){ $('#carrySheet').classList.remove('active'); return; }
   const qv = $('#carryQty').value;
   if(qv==='' || isNaN(parseInt(qv))){ toast('本日の個数を入力してください','error'); return; }
-  const dk = r.overnightDate || (r.pendingDates||[])[0] || dateKey(new Date(r.lastRunEnd||nowMs()));
-  r.dailyCounts = r.dailyCounts || [];
+  const dk0 = r0.overnightDate || (r0.pendingDates||[])[0] || dateKey(new Date(r0.lastRunEnd||nowMs()));
+  const chk = await checkRecConflict('carry', r0.id, (a, c)=> a.status===c.status && canonJson(a.dailyCounts||[])===canonJson(c.dailyCounts||[]),
+    `${dk0.slice(5).replace('-','/')} の個数 ${parseInt(qv).toLocaleString()}個`);
+  if(!chk.ok){ $('#carrySheet').classList.remove('active'); carryRecordId = null; renderStatus(); return; }
+  const r = chk.cur;
+  const dk = dk0;
+  r.dailyCounts = (r.dailyCounts || []).filter(x=> x.date!==dk);
   r.dailyCounts.push({
     date: dk,
     qty: parseInt(qv),
@@ -3142,9 +3348,11 @@ function tickBoundaries(){
   if(changed || brk || heal || auto){ refreshActiveViews(); notifyPendingCarry(); }
 }
 
-function openEndSheet(){
+async function openEndSheet(){
+  if(!(await freshShown())) return;
   const r = shownRec();
   if(!r) return;
+  rememberRec('end', r);
   const stMin = totalStopMin(r);
   const prior = (r.dailyCounts||[]).reduce((s,d)=>s+(d.qty||0),0);
   const multi = (r.dailyCounts||[]).length > 0;
@@ -3175,9 +3383,10 @@ function endRecordLeaveQty(r){
   r.status = 'done';
   delete r.overnightDate; r.pendingCount = false;
 }
-function endLeaveQtyById(id){
+async function endLeaveQtyById(id){
+  await freshRecords(null, [id]);
   const r = store.records.find(x=>x.id===id);
-  if(!r || r.status==='done') return;
+  if(!r || r.status==='done'){ if(r) toast(changedMsg(r.machineId, r), 'error'); closeEndSheet(); $('#carrySheet').classList.remove('active'); carryRecordId = null; refreshActiveViews(); return; }
   endRecordLeaveQty(r);
   planAutoDone();
   save();
@@ -3190,18 +3399,27 @@ function endLeaveQtyById(id){
   toast('終了しました。個数は「記録」タブであとから入力できます','success');
 }
 function endLeaveQtyFromCarry(){ endLeaveQtyById(carryRecordId); }
-function confirmEnd(skipQty){
-  const r = shownRec();
-  if(!r) { closeEndSheet(); return; }
+async function confirmEnd(skipQty){
+  const r0 = sheetBase.end ? store.records.find(x=> x.id===sheetBase.end.id) : shownRec();
+  if(!r0) { closeEndSheet(); return; }
   const qv = $('#endQty').value;
   const hasQty = !(qv==='' || isNaN(parseInt(qv)));
   if(!skipQty && !hasQty){ toast('生産個数を入力してください','error'); return; }
+  if(endBusy) return;
+  endBusy = true;
+  let chk;
+  try{
+    chk = await checkRecConflict('end', r0.id, (a, c)=> a.status===c.status && canonJson(a.dailyCounts||[])===canonJson(c.dailyCounts||[]),
+      hasQty ? `個数 ${parseInt(qv).toLocaleString()}個で終了` : '個数を入れずに終了');
+  } finally { endBusy = false; }
+  if(!chk.ok){ closeEndSheet(); return; }
+  const r = chk.cur;
   const nowIso = nowDate().toISOString();
   const note = $('#endNote').value.trim();
   if(hasQty){
     closeAllOpenStops(r, nowIso);   // 開いたままの停止は終了時刻で閉じる
     const dk = dateKey(nowDate());
-    r.dailyCounts = r.dailyCounts || [];
+    r.dailyCounts = (r.dailyCounts || []).filter(x=> x.date!==dk);   // 同じ日の個数は入れ替える（上書きした時に二重にならないように）
     r.dailyCounts.push({ date: dk, qty: parseInt(qv), at: nowIso, note:'' });
     r.pendingDates = (r.pendingDates||[]).filter(x=>x!==dk);
     r.endTime = nowIso;
@@ -3539,7 +3757,7 @@ function recCard(r){
       <div class="rec-cell"><div class="lab">開始</div><div class="val">${fmtDT(r.startTime)}</div></div>
       <div class="rec-cell"><div class="lab">終了</div><div class="val">${r.status==='done'?fmtDT(r.endTime):'—'}</div></div>
       <div class="rec-cell"><div class="lab">${r.status==='done'?'実働日数':'経過'}</div><div class="val">${r.status==='done'? (dc.length+'日') : durLabel(dur)+'〜'}</div></div>
-      <div class="rec-cell"><div class="lab">${dc.length>1?'合計個数':'個数'}</div>${(r.status==='done' && (dc.length<=1 || (r.pendingDates||[]).length>0))?`<input type="number" class="qty-edit${showQty && !(r.pendingDates||[]).length?'':' missing'}" inputmode="numeric" value="${(r.pendingDates||[]).length?'':(showQty?total:'')}" placeholder="${(r.pendingDates||[]).length?esc(r.pendingDates[0].slice(5).replace('-','/'))+' の個数を入力':'個数を入力'}" onchange="setRecordQty('${r.id}', this.value)">`:`<div class="val qty">${showQty?total.toLocaleString():'—'}</div>`}</div>
+      <div class="rec-cell"><div class="lab">${dc.length>1?'合計個数':'個数'}</div>${(r.status==='done' && (dc.length<=1 || (r.pendingDates||[]).length>0))?`<input type="number" class="qty-edit${showQty && !(r.pendingDates||[]).length?'':' missing'}" inputmode="numeric" value="${(r.pendingDates||[]).length?'':(showQty?total:'')}" placeholder="${(r.pendingDates||[]).length?esc(r.pendingDates[0].slice(5).replace('-','/'))+' の個数を入力':'個数を入力'}" onfocus="rememberRecById('qty:${r.id}', '${r.id}')" onchange="setRecordQty('${r.id}', this.value)">`:`<div class="val qty">${showQty?total.toLocaleString():'—'}</div>`}</div>
       ${stMin>0?`<div class="rec-cell"><div class="lab">停止合計</div><div class="val stopval">${durLabel(stMin)}</div></div>
       <div class="rec-cell"><div class="lab">正味稼働</div><div class="val">${durLabel(netWorkMin(r))}${active?'〜':''}</div></div>`:''}
     </div>
@@ -3966,7 +4184,7 @@ function addStopCalc(){
   const min=(th*60+tm)-(fh*60+fm);
   $('#addStopCalc').textContent = min>0 ? (min+'分間の停止として追加します') : '終了は開始より後にしてください';
 }
-function confirmAddStop(){
+async function confirmAddStop(){
   const chip=document.querySelector('#addStopChips .chip.sel');
   if(!chip){ toast('理由を選んでください','error'); return; }
   const f=$('#addStopFrom').value, t=$('#addStopTo').value;
@@ -3975,8 +4193,11 @@ function confirmAddStop(){
   const from=new Date(addStopDate); from.setHours(fh,fm,0,0);
   const to=new Date(addStopDate); to.setHours(th,tm,0,0);
   if(to.getTime()<=from.getTime()){ toast('終了は開始より後にしてください','error'); return; }
-  // その時間帯に稼働していた作業記録を探す
-  const rec = store.records.find(r=> r.machineId===addStopMachineId && new Date(r.startTime).getTime()<=from.getTime() && endRefT(r)>=to.getTime());
+  // その時間帯に稼働していた作業記録を探す（最新を読み込んでから）
+  const find = ()=> store.records.find(r=> r.machineId===addStopMachineId && new Date(r.startTime).getTime()<=from.getTime() && endRefT(r)>=to.getTime());
+  const rec0 = find();
+  await freshRecords(addStopMachineId, rec0 ? [rec0.id] : []);
+  const rec = find();
   if(!rec){ toast('その時間帯に作業記録がありません','error'); return; }
   rec.stops = rec.stops || [];
   rec.stops.push({ reason: chip.textContent, detail:'後から追加', from: from.toISOString(), to: to.toISOString() });
@@ -4000,7 +4221,7 @@ function openEditStops(machineId, reasonKey){
       if((s.detail==='後から追加') !== isAdded) return;
       if(dateKey(new Date(s.from))!==dk) return;
       const ri = editStopRefs.length;
-      editStopRefs.push({ recId:r.id, idx });
+      editStopRefs.push({ recId:r.id, idx, reason:s.reason, from0:s.from, to0:s.to||null });
       rows.push(`<div class="es-row"><div class="time-row">
         <label>開始<input type="time" id="es-from-${ri}" value="${hhmm(new Date(s.from))}"></label>
         <label>終了<input type="time" id="es-to-${ri}" value="${s.to?hhmm(new Date(s.to)):''}"></label>
@@ -4008,29 +4229,45 @@ function openEditStops(machineId, reasonKey){
     });
   });
   if(!rows.length){ toast('編集できる停止がありません','error'); return; }
+  [...new Set(editStopRefs.map(x=> x.recId))].forEach(id=> rememberRecById('es:'+id, id));
   $('#editStopHead').textContent = machineId + ' ／ ' + reasonKey + ' ／ ' + fmtDate(summaryDate);
   $('#editStopList').innerHTML = rows.join('') + '<div class="set-note">終了時刻を空にすると「継続中」になります。押し忘れた終了時刻を入れてください。</div>';
   $('#editStopSheet').classList.add('active');
 }
 function closeEditStop(){ $('#editStopSheet').classList.remove('active'); }
-function saveEditStop(){
+async function saveEditStop(){
   const base0 = new Date(summaryDate);
+  // 入力を先に読んで確かめる
   let ok = true;
-  editStopRefs.forEach((ref,ri)=>{
-    const r = store.records.find(x=>x.id===ref.recId); if(!r || !r.stops[ref.idx]) return;
-    const s = r.stops[ref.idx];
+  const vals = editStopRefs.map((ref,ri)=>{
     const fv = ($('#es-from-'+ri)||{}).value, tv = ($('#es-to-'+ri)||{}).value;
-    if(!fv){ ok=false; return; }
+    if(!fv){ ok=false; return null; }
     const [fh,fm]=fv.split(':').map(Number);
     const from=new Date(base0); from.setHours(fh,fm,0,0);
+    let to = null;
     if(tv){
       const [th,tm]=tv.split(':').map(Number);
-      const to=new Date(base0); to.setHours(th,tm,0,0);
-      if(to.getTime()<=from.getTime()){ ok=false; return; }
-      s.from=from.toISOString(); s.to=to.toISOString();
-    } else { s.from=from.toISOString(); s.to=null; }
+      to=new Date(base0); to.setHours(th,tm,0,0);
+      if(to.getTime()<=from.getTime()){ ok=false; return null; }
+    }
+    return { ref, from: from.toISOString(), to: to ? to.toISOString() : null };
   });
   if(!ok){ toast('時刻を確認してください（終了は開始より後）','error'); return; }
+  // 最新を読み込み、直そうとしている停止が他の端末で変わっていないか確かめる
+  const ids = [...new Set(editStopRefs.map(x=> x.recId))];
+  await freshRecords(null, ids);
+  const findStop = ref=>{ const r = store.records.find(x=> x.id===ref.recId); return r ? (r.stops||[]).find(x=> x.reason===ref.reason && x.from===ref.from0) : null; };
+  const moved = editStopRefs.filter(ref=>{ const st = findStop(ref); return !st || (st.to||null) !== (ref.to0||null); });
+  if(moved.length){
+    const r1 = store.records.find(x=> x.id===moved[0].recId);
+    const when = r1 && r1.savedAt ? fmtDT(r1.savedAt) : '少し前';
+    const lines = moved.map(ref=>{ const st = findStop(ref); return `${ref.reason} ${fmtT(ref.from0)}〜：` + (st ? `今は ${st.to ? fmtT(st.to) : '継続中'} まで` : '消されています'); });
+    const p = confirmDialog('他の端末で先に変更されています', `この停止は ${when} に別の端末で保存されています。\n\n違うところ：\n${lines.map(l=> '・' + l).join('\n')}`, 'このまま上書き', true);
+    $('#cfCancel').textContent = '最新を読み込む';
+    if(!(await p)){ closeEditStop(); renderSummary(); toast('最新の内容にしました。確かめてから、もう一度直してください'); return; }
+    if(!(await confirmDialog('本当に上書きしますか？', '先に保存された内容が、この端末の入力で置き換わります。', '上書きする', true))){ closeEditStop(); renderSummary(); return; }
+  }
+  vals.forEach(v=>{ const st = findStop(v.ref); if(st){ st.from = v.from; st.to = v.to; } });
   // 開いていた停止を閉じたら、停止中のレコードは稼働中に戻す
   [...new Set(editStopRefs.map(x=>x.recId))].forEach(id=>{
     const r = store.records.find(x=>x.id===id);
@@ -4436,9 +4673,13 @@ function setAuto(id, key, val){
   if(key==='on' && val) processAutoDaily();
   refreshActiveViews();
 }
-function setRecordQty(id, val){
-  const r = store.records.find(x=>x.id===id); if(!r) return;
+async function setRecordQty(id, val){
+  if(!store.records.some(x=>x.id===id)) return;
   const n = parseInt(val); const q = isNaN(n)?0:n;
+  const chk = await checkRecConflict('qty:'+id, id, (a, c)=> canonJson(a.dailyCounts||[])===canonJson(c.dailyCounts||[]) && canonJson(a.pendingDates||[])===canonJson(c.pendingDates||[]),
+    `個数 ${q.toLocaleString()}個`);
+  if(!chk.ok){ renderRecords(); return; }
+  const r = chk.cur;
   // 入れる日：ふつうは開始日。個数を入れずに終了した記録は、その未入力の日
   const dk = (r.pendingDates||[]).length ? r.pendingDates[0] : dateKey(new Date(r.startTime));
   r.dailyCounts = r.dailyCounts || [];
@@ -5410,7 +5651,12 @@ async function planCancelEdit(){
   await planDiscardEdit();
 }
 // 確定していない変更があるか（自分で動かした・足した・消した注文。他の端末から届いた作業の進みは数えない）
-function canonJson(o){ return JSON.stringify(o, Object.keys(o).sort()); }
+function sortKeysDeep(x){
+  if(Array.isArray(x)) return x.map(sortKeysDeep);
+  if(x && typeof x === 'object'){ const r = {}; Object.keys(x).sort().forEach(k=>{ if(x[k] !== undefined) r[k] = sortKeysDeep(x[k]); }); return r; }
+  return x;
+}
+function canonJson(o){ return JSON.stringify(sortKeysDeep(o === undefined ? null : o)); }
 function planIsDirty(){
   if(!planEdit) return false;
   if(planDraftDel.size) return true;
@@ -5986,7 +6232,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.77';
+const APP_VERSION = '2026-06-28.78';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
