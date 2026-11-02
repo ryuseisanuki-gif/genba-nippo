@@ -4491,6 +4491,7 @@ function monthlyMachineSheet(mid, ym){
     const day = new Date(d), dk = dateKey(day);
     const hasCount = store.records.some(r=> r.machineId===mid && (r.dailyCounts||[]).some(x=> x.date===dk));
     if(!machineDayHasRecord(day, mid) && !hasCount) continue;
+    if(offDay(day) || isShutdown(day, mid)) continue;   // 土日祝・休止の日は除く（日別集計と同じ。持ち越しの作業がまたいでいても動いていない）
     const sm = summaryFor(mid, day);
     const rs = Object.entries(sm.reasons||{}).sort((a, b)=> b[1]-a[1]).map(([k, v])=> `${k} ${Math.round(v)}`).join(' / ');
     rows.push([`${day.getFullYear()}/${pad(day.getMonth()+1)}/${pad(day.getDate())}`, WD_JA[day.getDay()], sm.rate, sm.runMin, sm.notRun, sm.loggedStopMin, sm.breakMin, sm.qty||0, sm.target, rs]);
