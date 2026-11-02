@@ -87,6 +87,15 @@
   #updateBar button{border:none;border-radius:8px;font-weight:800;font-family:inherit;}
   #updateBar .u-go{background:#fff;color:#1e8a3e;padding:7px 16px;}
   #updateBar .u-x{background:transparent;color:#fff;font-size:18px;line-height:1;padding:4px 8px;}
+  /* 開いた直後：サーバーから最新の内容が届くまで待つ */
+  #freshWait{position:fixed;inset:0;z-index:240;background:rgba(15,22,33,.45);display:flex;align-items:center;justify-content:center;}
+  #freshWait.hidden{display:none;}
+  #freshWait .fw-card{background:#fff;color:#1b2430;border-radius:14px;padding:18px 22px;font-size:15px;font-weight:800;
+    box-shadow:0 6px 24px rgba(0,0,0,.25);display:flex;align-items:center;gap:12px;max-width:86%;}
+  #freshWait .fw-spin{width:20px;height:20px;border-radius:50%;border:3px solid #d5dbe3;border-top-color:#1e8a3e;flex-shrink:0;animation:fwspin .8s linear infinite;}
+  @keyframes fwspin{to{transform:rotate(360deg)}}
+  #freshNote{background:#fff4d6;color:#7a5200;border-bottom:1px solid #f0d58a;padding:8px 14px;font-size:13px;font-weight:700;line-height:1.5;}
+  #freshNote.hidden{display:none;}
   /* 設定タブの更新カード */
   .ver-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
   .ver-info{flex:1;min-width:0;font-size:13px;color:var(--ink2);font-weight:600;}
@@ -893,6 +902,7 @@
     <div class="clock" id="clock">—</div>
   </div>
 </header>
+<div id="freshNote" class="hidden">📶 圏外などで、最新の情報を確認できていません。押した操作は、つながった時に他の端末の記録と合わせて保存します。</div>
 
 <nav class="tabs">
   <button class="tab active" data-tab="input"><span class="ic">📝</span>日報入力</button>
@@ -1336,6 +1346,7 @@
   <button class="u-go" onclick="applyUpdate()">今すぐ更新</button>
   <button class="u-x" onclick="$('#updateBar').classList.add('hidden')" aria-label="閉じる">×</button>
 </div>
+<div id="freshWait" class="hidden"><div class="fw-card"><span class="fw-spin"></span><span>最新の情報を読み込み中…</span></div></div>
 <div id="toast"></div>
 
 <!-- Firebase (CDN compat ビルド — バンドラ不要) -->
@@ -1550,7 +1561,52 @@ let autoCreateReady = false;
 function enableAutoCreate(){
   if(autoCreateReady) return;
   autoCreateReady = true;
-  if(processAutoDaily()) { refreshActiveViews(); }
+  if(autoOk() && processAutoDaily()) { refreshActiveViews(); }
+}
+/* ===== 開いた直後は、サーバーから最新の内容が届くまで自動の処理をしない =====
+   久しぶりに開いた端末は、最初は前に開いた時の古い内容を持っている。その内容で休憩・日またぎ・二重の片付けなどを
+   して保存すると、他の端末の記録を消してしまう（2026-10-30・11-02 に実際に起きた）。
+   ボタンは押せる（圏外でも記録できるように）。押した内容は、送るときに他の端末の記録と合わせる。 */
+let serverFresh = false;          // 最新の内容が届いた
+let localOnly = false;            // クラウドを使わない（この端末だけで動く）
+let resumeWait = false;           // しばらく閉じていた画面に戻ったので、最新を読み直している
+const srvSeen = {};               // サーバーから届いた一覧（キャッシュではない）
+const FRESH_NEED = ['records','active','machines','shutdowns','workdays'];
+function autoOk(){ return localOnly || (serverFresh && !resumeWait); }
+let freshWaitT = 0;
+function showFreshWait(){
+  if(localOnly || autoOk()) return;
+  const w = $('#freshWait');
+  if(navigator.onLine === false){ if(w) w.classList.add('hidden'); showFreshNote(); return; }
+  if(w) w.classList.remove('hidden');
+  clearTimeout(freshWaitT);
+  freshWaitT = setTimeout(()=>{ if(!autoOk()){ if(w) w.classList.add('hidden'); showFreshNote(); } }, 8000);   // 待たせるのは8秒まで（そのあとは押せる）
+}
+function showFreshNote(){ const n = $('#freshNote'); if(n) n.classList.remove('hidden'); }
+function hideFreshWait(){
+  clearTimeout(freshWaitT);
+  const w = $('#freshWait'); if(w) w.classList.add('hidden');
+  const n = $('#freshNote'); if(n) n.classList.add('hidden');
+}
+function onFreshReady(){
+  if(!autoOk()) return;
+  hideFreshWait();
+  retryRecPending();
+  tickBoundaries();
+}
+function noteServerSnap(name, snap){
+  if(snap.metadata.fromCache || srvSeen[name]) return;
+  srvSeen[name] = true;
+  if(!serverFresh && FRESH_NEED.every(n=> srvSeen[n])){ serverFresh = true; onFreshReady(); }
+}
+// しばらく閉じていた画面に戻った時：作業中の記録を読み直してから自動の処理をする
+let hiddenAt = 0, resumeTry = 0;
+async function resumeRefresh(){
+  if(localOnly || !resumeWait) return;
+  clearTimeout(resumeTry);
+  const ok = await freshRecords(null, []);
+  if(ok){ resumeWait = false; onFreshReady(); }
+  else resumeTry = setTimeout(resumeRefresh, 5000);
 }
 // orders（予定）は初回同期の条件に入れない（読めなくても日報は今まで通り動くように）
 const firstSnap = { machines:false, records:false, coils:false, shutdowns:false, workdays:false, orders:false, parts:false, settings:false };
@@ -1624,7 +1680,7 @@ function pruneOldRecords(){
 }
 
 function initSync(){
-  if(!window.firebase || !firebaseConfig.apiKey){ setSyncStatus('offline'); enableAutoCreate(); return; }
+  if(!window.firebase || !firebaseConfig.apiKey){ localOnly = true; setSyncStatus('offline'); enableAutoCreate(); return; }
   try{
     firebase.initializeApp(firebaseConfig);
     db = firebase.firestore();
@@ -1636,26 +1692,28 @@ function initSync(){
     firebase.auth().signInAnonymously().catch(e=>{ console.warn('anon auth failed', e); setSyncStatus('offline'); enableAutoCreate(); });
     // 圏外などで同期できない場合も、一定時間後には自動記録を作れるようにする
     setTimeout(enableAutoCreate, 12000);
-  }catch(e){ console.warn('firebase init failed', e); setSyncStatus('offline'); enableAutoCreate(); }
+  }catch(e){ console.warn('firebase init failed', e); localOnly = true; db = null; setSyncStatus('offline'); enableAutoCreate(); }
+  showFreshWait();
 }
 function attachListeners(){
   flushPendingDels();   // 圏外の間に消したものを、つながった今のうちに消す
-  db.collection('machines').onSnapshot(s=>applySnap('machines', s), e=>{ console.warn('machines listen', e); setSyncStatus('offline'); });
+  const MD = { includeMetadataChanges:true };
+  db.collection('machines').onSnapshot(MD, s=>applySnap('machines', s), e=>{ console.warn('machines listen', e); setSyncStatus('offline'); });
   // 記録は「直近 RECENT_DAYS 日」だけ常時監視する（何年分あっても起動が重くならない）。
   // それより古い記録はサーバーに残り、集計や記録タブで必要になった時だけ読み込む。
   db.collection('records').where('startTime','>=', recentCutoffIso())
-    .onSnapshot(s=>applySnap('records', s), e=>{
+    .onSnapshot(MD, s=>applySnap('records', s), e=>{
       console.warn('records listen', e); setSyncStatus('offline');
       // 万一クエリが使えない環境では全件監視に切り替える（動作優先）
       if(!recentFallbackDone){ recentFallbackDone = true; recentOnly = false;
-        db.collection('records').onSnapshot(s2=>applySnap('records', s2), e2=>console.warn('records listen(all)', e2)); }
+        db.collection('records').onSnapshot(MD, s2=>applySnap('records', s2), e2=>console.warn('records listen(all)', e2)); }
     });
   // 直近の窓から外れていても「作業中／持ち越し」の記録は必ず読む（機械が空きに見えるのを防ぐ）
   db.collection('records').where('status','in',['running','stopped','overnight'])
-    .onSnapshot(s=>applySnap('records', s, 'active'), e=>console.warn('active listen', e));
+    .onSnapshot(MD, s=>applySnap('records', s, 'active'), e=>console.warn('active listen', e));
   db.collection('coils').onSnapshot(s=>applySnap('coils', s), e=>{ console.warn('coils listen', e); setSyncStatus('offline'); });
-  db.collection('shutdowns').onSnapshot(s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
-  db.collection('workdays').onSnapshot(s=>applySnap('workdays', s), e=>{ console.warn('workdays listen', e); setSyncStatus('offline'); });
+  db.collection('shutdowns').onSnapshot(MD, s=>applySnap('shutdowns', s), e=>{ console.warn('shutdowns listen', e); setSyncStatus('offline'); });
+  db.collection('workdays').onSnapshot(MD, s=>applySnap('workdays', s), e=>{ console.warn('workdays listen', e); setSyncStatus('offline'); });
   db.collection('parts').onSnapshot(s=>applySnap('parts', s), e=>console.warn('parts listen', e));   // 品番ごとの品名
   db.collection('settings').onSnapshot(s=>applySnap('settings', s), e=>console.warn('settings listen', e));   // デモ／本番の切り替え
   ensureOrdersListener();
@@ -1686,6 +1744,11 @@ function reconcileFirstSnap(kind, snap){
   for(let i = list.length - 1; i >= 0; i--){ if(!ids.has(list[i].id) && !fresh(list[i])) list.splice(i, 1); }
 }
 function applySnap(kind, snap, src){
+  if(firstSnap[kind] && !snap.docChanges().length){   // 中身は変わらず「キャッシュ／サーバー」だけが変わった
+    if(!snap.metadata.hasPendingWrites) setSyncStatus(navigator.onLine ? 'online' : 'offline');
+    noteServerSnap(src==='active' ? 'active' : kind, snap);
+    return;
+  }
   if(!firstSnap[kind] && RECONCILE_KINDS.includes(kind)) reconcileFirstSnap(kind, snap);
   if(kind==='orders' && planEdit){
     // 編集中：他の端末からの変更は、作業の進み（開始・完了）と新しい注文だけ取り込む。並びは編集中の内容を残す
@@ -1711,6 +1774,7 @@ function applySnap(kind, snap, src){
     //（前は消していたので、終わった作業がその端末の集計から抜けることがあった）
     if(ch.type==='removed' && src==='active'){ recheckRecord(id); return; }
     if(kind==='records' && !ch.doc.metadata.hasPendingWrites) recSeen.add(id);
+    if(kind==='records' && ch.type!=='removed' && recUnsent(id)) return;   // この端末でまだ送れていない変更がある：送るときに合わせる
     const i = arr.findIndex(x=>x.id===id);
     if(ch.type==='removed'){ if(i>=0) arr.splice(i,1); delete lastSynced[kind+'/'+id]; }
     else { if(i>=0) arr[i] = data; else arr.push(data); lastSynced[kind+'/'+id] = JSON.stringify(data); }
@@ -1747,6 +1811,7 @@ function applySnap(kind, snap, src){
       toast(msg);
     }
   }
+  noteServerSnap(src==='active' ? 'active' : kind, snap);   // 届いた内容を入れ終わってから（自動の処理はこのあと）
 }
 function syncPush(){
   if(!fbReady || !db) return;
@@ -1768,9 +1833,9 @@ function syncPush(){
       const [c,id] = splitKey(k);
       if(c === 'records'){
         cur[k].savedAt = nowIso(); js = JSON.stringify(cur[k]);   // いつ保存したか（他の端末とぶつかった時に「○時○分に保存」と出す）
-        const base = lastSynced[k];
+        if(!(id in recPending)){ recPending[id] = lastSynced[k] || ''; saveRecPending(); }   // 変える前の内容（サーバーにあると分かっている内容）を覚える
         lastSynced[k] = js;
-        pushRecordWrite(id, js, base);
+        pushRecordWrite(id);
         return;
       }
       db.collection(c).doc(id).set(JSON.parse(js)).catch(e=>console.warn('push', k, e));
@@ -1809,10 +1874,33 @@ function delDoc(kind, id, noTomb){
 const recSeen = new Set();        // サーバーにあると確かめた記録（作ったばかりで届いていない記録と区別する）
 const recPushChain = {};          // 同じ記録の送信は順番に（前の送信が終わってから次を送る）
 const recInFlight = {};           // 送っている最中の記録（届く前のサーバーの内容で、手元を戻さないように）
+// まだサーバーに届いていない記録：id → 変える前の内容（'' は分からない）。閉じても残す（圏外で押した操作を失わないように）
+const REC_PENDING_KEY = 'genbaRecPending';
+const recPending = (()=>{ try{ const o = JSON.parse(localStorage.getItem(REC_PENDING_KEY) || '{}'); return (o && typeof o==='object') ? o : {}; }catch(e){ return {}; } })();
+function saveRecPending(){ try{ localStorage.setItem(REC_PENDING_KEY, JSON.stringify(recPending)); }catch(e){} }
+// この端末でまだ送れていない変更があるか
+function recUnsent(id){
+  if(id in recPending || recInFlight[id] > 0) return true;
+  const k = 'records/'+id, r = store.records.find(x=> x.id===id);
+  // 最初の同期の前は保存しても送らないので、前に開いた時の内容と違えば「まだ送れていない変更」
+  return !initialSyncDone && !!(r && lastSynced[k] !== undefined && JSON.stringify(r) !== lastSynced[k]);
+}
+// ためてある記録を送り直す（つながった時・最新が届いた時・30秒ごと）
+function retryRecPending(){
+  if(!fbReady || !db || navigator.onLine === false) return;
+  Object.keys(recPending).forEach(id=>{
+    if(recInFlight[id] > 0) return;
+    const k = 'records/'+id, r = store.records.find(x=> x.id===id);
+    if(!r){ delete recPending[id]; return; }
+    lastSynced[k] = JSON.stringify(r);
+    pushRecordWrite(id);
+  });
+  saveRecPending();
+}
 function withTimeout(p, ms){ return Promise.race([p, new Promise((_, rej)=> setTimeout(()=> rej(new Error('timeout')), ms))]); }
 // サーバーの記録を手元に入れる。この端末でまだ送っていない変更があるときは入れない（送るときに合わせる）
 function applyServerRecord(id, data){
-  if(recInFlight[id] > 0) return 0;
+  if(recInFlight[id] > 0 || id in recPending) return 0;
   const k = 'records/'+id, i = store.records.findIndex(x=> x.id===id);
   if(!data){
     if(i >= 0 && recSeen.has(id)){ store.records.splice(i, 1); delete lastSynced[k]; return 1; }   // 他の端末で削除された
@@ -1854,20 +1942,33 @@ async function freshRecords(machineId, ids){
 // 2つの一覧を合わせる：サーバーの一覧に、この端末で足した・変えた・消した分だけを反映する
 function mergeList(b, m, sv, key){
   b = b || []; m = m || []; sv = sv || [];
-  const bm = new Map(b.map(x=> [key(x), x])), mm = new Map(m.map(x=> [key(x), x]));
+  const bm = new Map(b.map(x=> [key(x), x])), mm = new Map(m.map(x=> [key(x), x])), sm = new Map(sv.map(x=> [key(x), x]));
   let out = sv.map(x=> x);
-  bm.forEach((x, k)=>{ if(!mm.has(k)) out = out.filter(y=> key(y) !== k); });           // この端末で消した
+  bm.forEach((x, k)=>{                                                                  // この端末で消した（他の端末が変えていなければ）
+    if(!mm.has(k) && (!sm.has(k) || canonJson(sm.get(k)) === canonJson(x))) out = out.filter(y=> key(y) !== k);
+  });
   mm.forEach((x, k)=>{
-    const bx = bm.get(k);
+    const bx = bm.get(k), sx = sm.get(k);
     if(bx && canonJson(bx) === canonJson(x)) return;                                    // この端末では変えていない
+    if(bx && (!sx || canonJson(sx) !== canonJson(bx))) return;                          // 他の端末でも変えた・消した：先に保存された方を残す
     const j = out.findIndex(y=> key(y) === k);
     if(j >= 0) out[j] = x; else out.push(x);                                            // この端末で変えた・足した
   });
   return out;
 }
 function mergeRecord(base, mine, server){
-  // 他の端末で終わっていた記録は、この端末の（古い内容からの）変更では動かさない
-  if(server.status === 'done' && base.status !== 'done' && mine.status !== 'done') return server;
+  // 他の端末で終わっていた記録は、この端末の（古い内容からの）変更では動かさない。
+  // （この端末で「終了」にした場合も同じ。先に終えた端末の終了時刻・個数を残す。ほかの日の個数だけは足す）
+  if(server.status === 'done' && base.status !== 'done'){
+    const out = JSON.parse(JSON.stringify(server));
+    const days = new Set((out.dailyCounts||[]).map(x=> x.date));
+    const add = (mine.dailyCounts||[]).filter(x=> !days.has(x.date) && !(base.dailyCounts||[]).some(y=> canonJson(y) === canonJson(x)));
+    if(add.length){ out.dailyCounts = (out.dailyCounts||[]).concat(add); out.qty = recordTotalQty(out); out.pendingDates = (out.pendingDates||[]).filter(d=> !add.some(x=> x.date===d)); }
+    out.savedAt = add.length ? mine.savedAt : server.savedAt;
+    if(out.savedAt === undefined) delete out.savedAt;
+    out._dropped = true;
+    return out;
+  }
   const out = JSON.parse(JSON.stringify(server));
   const keys = new Set([...Object.keys(base), ...Object.keys(mine)]);
   keys.forEach(k=>{
@@ -1889,37 +1990,59 @@ function mergeRecord(base, mine, server){
 function recordTxnPlan(baseJs, mineJs, server, seen){
   const mine = JSON.parse(mineJs);
   if(!server) return seen ? { write:false, deleted:true } : { write:true, doc:mine };   // 届く前の新しい記録は作る／削除された記録は作り直さない
-  if(baseJs === undefined) return { write:true, doc:mine };
-  const base = JSON.parse(baseJs);
-  if(canonJson(server) === canonJson(base)) return { write:true, doc:mine };              // だれも変えていない
+  let base;
+  if(!baseJs){
+    // 変える前の内容が分からない（同じ記録を2台が別々に作った時など）：停止・個数は両方を残し、ほかはサーバーのまま
+    base = Object.assign({}, mine, { stops:[], dailyCounts:[], pendingDates:[] });
+  } else {
+    base = JSON.parse(baseJs);
+    if(canonJson(server) === canonJson(base)) return { write:true, doc:mine };            // だれも変えていない
+  }
   const doc = mergeRecord(base, mine, server);
-  return { write: canonJson(doc) !== canonJson(server), doc, merged:true };
+  const dropped = !!doc._dropped; delete doc._dropped;
+  return { write: canonJson(doc) !== canonJson(server), doc, merged:true, dropped };
 }
 function afterRecordPush(id, mineJs, plan){
   const k = 'records/'+id, i = store.records.findIndex(x=> x.id===id);
   if(plan.deleted){ if(i >= 0) store.records.splice(i, 1); delete lastSynced[k]; dataVer++; refreshActiveViews(); return; }
   if(!plan.merged) return;
+  if(plan.dropped){
+    const when = plan.doc.savedAt ? fmtDT(plan.doc.savedAt) + ' に' : '';
+    toast(`${plan.doc.machineId} のこの作業は ${when}他の端末で終了されていたので、この端末の操作は保存しませんでした。画面を最新にしました`, 'error');
+  }
   // 合わせた内容を手元にも入れる（送ったあと手元でさらに変えていなければ）
   if(i >= 0 && JSON.stringify(store.records[i]) === mineJs){
     store.records[i] = plan.doc; lastSynced[k] = JSON.stringify(plan.doc);
     dataVer++; try{ localStorage.setItem(KEY, storeJson()); }catch(e){} refreshActiveViews();
   }
 }
-function pushRecordWrite(id, mineJs, baseJs){
+// 記録を送る。必ずサーバーの今の内容と合わせてから書く（そのまま上書きはしない）。
+// 圏外・通信エラーの時は送らずにためておき、つながってから送り直す（retryRecPending）
+const REC_NO_RETRY = ['permission-denied','invalid-argument','unauthenticated','unimplemented','out-of-range'];
+function pushRecordWrite(id){
   if(!fbReady || !db) return;
-  const ref = db.collection('records').doc(id);
+  const ref = db.collection('records').doc(id), k = 'records/'+id;
   const run = ()=>{
-    // 圏外のときは今までどおり（つながったら送られる）
-    if(navigator.onLine === false || !window.firebase) return ref.set(JSON.parse(mineJs)).catch(e=> console.warn('push', id, e));
+    if(!(id in recPending)) return;                       // もう送り終わっている
+    const mineJs = lastSynced[k];
+    if(mineJs === undefined){ delete recPending[id]; saveRecPending(); return; }
+    if(navigator.onLine === false || !window.firebase) return;   // 圏外：ためておく
+    const baseJs = recPending[id] || undefined;
     const seen = recSeen.has(id);
-    return db.runTransaction(tx=> tx.get(ref).then(snap=>{
+    return withTimeout(db.runTransaction(tx=> tx.get(ref).then(snap=>{
       const plan = recordTxnPlan(baseJs, mineJs, snap.exists ? snap.data() : null, seen);
       if(plan.write) tx.set(ref, plan.doc);
       return plan;
-    })).then(plan=> afterRecordPush(id, mineJs, plan)).catch(e=>{
+    })), 20000).then(plan=>{
+      // 送った後にこの端末でさらに変えていれば、次はいまサーバーにある内容を「変える前」として送る
+      if(lastSynced[k] === mineJs || plan.deleted) delete recPending[id];
+      else recPending[id] = JSON.stringify(plan.merged ? plan.doc : JSON.parse(mineJs));
+      saveRecPending();
+      afterRecordPush(id, mineJs, plan);
+    }).catch(e=>{
       console.warn('push txn', id, e);
-      if(e && (e.code === 'unavailable' || e.code === 'deadline-exceeded')) return ref.set(JSON.parse(mineJs)).catch(()=>{});
-      delete lastSynced['records/'+id];   // 次の保存でもう一度送る
+      if(e && REC_NO_RETRY.includes(e.code)){ delete recPending[id]; saveRecPending(); delete lastSynced[k]; }   // 送り直しても通らない
+      // それ以外（圏外・混雑・時間切れ）はためたまま。つながったら送り直す
     });
   };
   recInFlight[id] = (recInFlight[id] || 0) + 1;
@@ -2865,6 +2988,7 @@ async function resumeJob(){
 
 /* ===== DAY BOUNDARIES (17:00 auto end-of-day / 9:00 auto resume) ===== */
 function processDayBoundaries(){
+  if(!autoOk()) return false;   // 最新の内容が届くまでは何もしない（古い内容で終了・持ち越しにしない）
   const now = nowMs();
   let changed = false;
   // (1) Past 17:00 → running/stopped jobs become overnight (await today's count)
@@ -3094,6 +3218,7 @@ function canMakeAuto(m, todays, shut){
   return !hasRecordOn(m.id, today);   // 手動で開始した記録がある日は自動記録を作らない
 }
 function processAutoDaily(){
+  if(!autoOk()) return false;   // 最新の内容が届くまでは、作る・消す・締めるをしない
   const now = nowMs();
   const today = nowDate(); today.setHours(0,0,0,0);
   const nine = stdStart(today);
@@ -3292,6 +3417,7 @@ function refreshHeavyViews(){
 // periodic + on-demand boundary check (non-blocking: just notify, never auto-popup)
 // 休憩の自動停止/再開（12:00-12:45, 15:00-15:15）。アプリが開いている間だけ動作（集計は常に休憩控除）。
 function processBreaks(){
+  if(!autoOk()) return false;
   const now = nowMs();
   let changed = false;
   BREAKS.forEach(b=>{
@@ -3342,6 +3468,8 @@ function scheduleBoundaryTick(){
   if(next !== null) boundaryTimer = setTimeout(()=>{ tickBoundaries(); scheduleBoundaryTick(); }, Math.max(500, next - nowMs()));
 }
 function tickBoundaries(){
+  retryRecPending();                // ためてある記録を送り直す
+  if(!autoOk()) return;             // 最新の内容が届くまでは、休憩・日またぎ・片付けをしない
   const changed = processDayBoundaries();
   const brk = processBreaks();
   const heal = healOpenStops() + healPendingDates() + healDuplicateActives() + healShutdownAuto();   // 閉じ忘れの停止・未入力の印・記録の二重・休止日の空の自動記録を直す
@@ -6235,7 +6363,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.79';
+const APP_VERSION = '2026-06-28.80';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
@@ -6288,6 +6416,7 @@ function applyUpdate(){
 /* ===== 新しい版を自動で適用する（押してもらわなくても更新される） =====
    入力中・読み取り中・操作直後は待つ。画面を見ていない時はすぐ入れ替える。 */
 const AUTO_UPD_KEY = 'genbaLastAutoUpd';
+const BOOT_AT = /*RAW*/Date.now();
 const AUTO_UPD_QUIET = 20000;      // 最後に触ってからこれだけ空いたら入れ替える
 let lastInteraction = 0, autoUpdTimer = null;
 ['pointerdown','keydown','touchstart'].forEach(ev=>
@@ -6300,6 +6429,7 @@ function autoUpdateAllowed(){
   if($('#scanModal') && $('#scanModal').classList.contains('active')) return false;   // バーコード読み取り中
   const ae = document.activeElement;
   if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return false;         // 何か入力中
+  if(/*RAW*/Date.now() - BOOT_AT < 20000) return true;                         // 開いた直後（まだ何も操作していない）はすぐ入れ替える
   if(!document.hidden && /*RAW*/Date.now() - lastInteraction < AUTO_UPD_QUIET) return false;   // 操作直後
   return true;
 }
@@ -6327,7 +6457,9 @@ function init(){
     try{ history.replaceState(null, '', location.pathname); }catch(e){}
   }
   load();
-  processDayBoundaries();          // catch up any 17:00 / 9:00 boundaries since last open
+  // 前に開いた時の内容を「サーバーにあると分かっている内容」として覚える（届いた内容と比べて、変えた所だけを送るため）
+  store.records.forEach(r=>{ if(!(r.id in recPending)) lastSynced['records/'+r.id] = JSON.stringify(r); });
+  processDayBoundaries();          // catch up any 17:00 / 9:00 boundaries since last open（最新が届いてから動く）
   processBreaks();                 // 休憩(12:00-12:45 / 15:00-15:15)の自動停止/再開をキャッチアップ
   processAutoDaily();              // 自動記録（9:00開始/17:00終了）をキャッチアップ
   setupOverlayDismiss();
@@ -6353,15 +6485,18 @@ function init(){
   scheduleBoundaryTick();                                    // 休憩の開始・終了ぴったりに反映する
   // 画面を見た瞬間に最新にする（スリープ中はタイマーが止まるので、休憩明けの反映が遅れて見えていた）
   document.addEventListener('visibilitychange', ()=>{
-    if(document.hidden){ maybeAutoUpdate(); return; }   // 見ていない間に入れ替えておく
+    if(document.hidden){ hiddenAt = /*RAW*/Date.now(); maybeAutoUpdate(); return; }   // 見ていない間に入れ替えておく
     checkForUpdate();
+    // 3分以上閉じていたら、作業中の記録を読み直してから自動の処理をする（スリープ中は届いていないことがある）
+    if(!localOnly && hiddenAt && /*RAW*/Date.now() - hiddenAt > 180000){ resumeWait = true; showFreshWait(); resumeRefresh(); }
+    hiddenAt = 0;
     tickBoundaries();
     scheduleBoundaryTick();
     clockTick();
   });
   window.addEventListener('pageshow', checkForUpdate);       // iOSの復帰（bfcache）対策
   window.addEventListener('focus', checkForUpdate);
-  window.addEventListener('online', ()=>{ checkForUpdate(); flushPendingDels(); });   // 圏外から戻った時
+  window.addEventListener('online', ()=>{ checkForUpdate(); flushPendingDels(); retryRecPending(); if(resumeWait) resumeRefresh(); });   // 圏外から戻った時
 }
 init();
 </script>
