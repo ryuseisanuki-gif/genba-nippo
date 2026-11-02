@@ -982,6 +982,7 @@
     </select>
     <button class="rchip" id="recMissingBtn" onclick="toggleRecMissing()">個数未入力のみ</button>
     <button class="btn-out" onclick="exportCSV()">⬇ CSV</button>
+    <button class="btn-out" onclick="openXlsxSheet()">📊 月別エクセル</button>
     <button class="btn-out" onclick="exportJSON()">⬇ バックアップ</button>
   </div>
   <div id="recordsList"></div>
@@ -1325,6 +1326,21 @@
   </div>
 </div>
 <div id="planTip" hidden></div>
+<div class="ov" id="xlsxSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>📊 月別エクセル</h3>
+    <div class="of">
+      <label>月<input type="month" id="xlsxMonth" class="of-in mono"></label>
+      <div class="set-note" style="margin:-4px 0 10px">機械ごとのシートに「日ごと（稼働率・停止・個数）」と「作業ごと」を入れた1つのエクセルを作ります。最初のシートは全機械のまとめです。
+      パソコンでは、月が変わって最初に開いた時に、先月分を自動でダウンロードします。</div>
+    </div>
+    <div class="sheet-actions">
+      <button class="b-cancel" onclick="closeXlsxSheet()">キャンセル</button>
+      <button class="b-ok" onclick="saveXlsxSheet()">ダウンロード</button>
+    </div>
+  </div>
+</div>
 <div class="ov" id="partSheet">
   <div class="sheet">
     <div class="grab"></div>
@@ -1593,6 +1609,7 @@ function onFreshReady(){
   hideFreshWait();
   retryRecPending();
   tickBoundaries();
+  setTimeout(maybeMonthlyXlsx, 3000);   // 月が変わっていたら先月分のエクセルを出す（パソコンだけ）
 }
 function noteServerSnap(name, snap){
   if(snap.metadata.fromCache || srvSeen[name]) return;
@@ -3476,6 +3493,7 @@ function tickBoundaries(){
   syncPartsMaster();                // 新しく使われた品番を品番マスターに登録
   const auto = processAutoDaily();
   notifyLongStops();                // 再開の押し忘れを知らせる
+  maybeMonthlyXlsx();               // 月が変わったら先月分のエクセル（パソコンだけ・月に1回）
   if(changed || brk || heal || auto){ refreshActiveViews(); notifyPendingCarry(); }
 }
 
@@ -4435,6 +4453,135 @@ function exportCSV(){
   const csv = '\uFEFF' + head.map(csvCell).join(',') + '\r\n' + rows.join('\r\n');
   downloadBlob(csv, `日報_${stamp()}.csv`, 'text/csv;charset=utf-8');
   toast('CSVを書き出しました','success');
+}
+/* ===== 月別エクセル（1つのエクセルに、機械ごとのシート：日ごと＋作業ごと） =====
+   パソコンでは、月が変わって最初に開いた時に先月分を自動でダウンロードする（アプリを閉じている間は作れないため）。
+   エクセルを作る部品（SheetJS）は、使う時だけ読み込む */
+const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+const MONTHLY_XLSX_KEY = 'genbaMonthlyXlsx';   // 自動で出した最後の月（YYYY-MM）
+let xlsxLoading = null;
+function loadXlsxLib(){
+  if(window.XLSX) return Promise.resolve(window.XLSX);
+  if(!xlsxLoading) xlsxLoading = new Promise((res, rej)=>{
+    const sc = document.createElement('script'); sc.src = XLSX_URL;
+    sc.onload = ()=> window.XLSX ? res(window.XLSX) : rej(new Error('xlsx'));
+    sc.onerror = ()=>{ xlsxLoading = null; rej(new Error('xlsx load')); };
+    document.head.appendChild(sc);
+  });
+  return xlsxLoading;
+}
+function monthKeyOf(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}`; }
+function prevMonthKey(){ const d = nowDate(); d.setDate(1); d.setMonth(d.getMonth()-1); return monthKeyOf(d); }
+function monthLabel(ym){ const [y, m] = ym.split('-'); return `${y}年${Number(m)}月`; }
+const WD_JA = ['日','月','火','水','木','金','土'];
+// 1台ぶんのシート（日ごと＋作業ごと）と、まとめ用の合計
+function monthlyMachineSheet(mid, ym){
+  const [y, m] = ym.split('-').map(Number);
+  const first = new Date(y, m-1, 1), next = new Date(y, m, 1);
+  const fromT = first.getTime(), toT = next.getTime();
+  const ymKey = ym + '-';
+  const rows = [];
+  const nm = machineName(mid);
+  rows.push([`${mid}${nm ? '（' + nm + '）' : ''}　${monthLabel(ym)}`]);
+  rows.push([]);
+  rows.push(['■ 日ごと']);
+  rows.push(['日付','曜日','稼働率(%)','稼働(分)','止まっていた(分)','記録した停止(分)','休憩(分)','個数','目標個数','停止の内訳（分）']);
+  const tot = { days:0, run:0, notRun:0, logged:0, win:0, qty:0, jobs:0 };
+  for(let d = new Date(first); d.getTime() < toT && d.getTime() <= nowMs(); d.setDate(d.getDate()+1)){
+    const day = new Date(d), dk = dateKey(day);
+    const hasCount = store.records.some(r=> r.machineId===mid && (r.dailyCounts||[]).some(x=> x.date===dk));
+    if(!machineDayHasRecord(day, mid) && !hasCount) continue;
+    const sm = summaryFor(mid, day);
+    const rs = Object.entries(sm.reasons||{}).sort((a, b)=> b[1]-a[1]).map(([k, v])=> `${k} ${Math.round(v)}`).join(' / ');
+    rows.push([`${day.getFullYear()}/${pad(day.getMonth()+1)}/${pad(day.getDate())}`, WD_JA[day.getDay()], sm.rate, sm.runMin, sm.notRun, sm.loggedStopMin, sm.breakMin, sm.qty||0, sm.target, rs]);
+    if(sm.rate != null){ tot.days++; tot.win += sm.workWindow; }
+    tot.run += sm.runMin; tot.notRun += sm.notRun; tot.logged += sm.loggedStopMin; tot.qty += (sm.qty||0);
+  }
+  tot.rate = tot.win ? Math.round(tot.run / tot.win * 100) : null;
+  rows.push(['合計', `${tot.days}日`, tot.rate, tot.run, tot.notRun, tot.logged, '', tot.qty]);
+  rows.push([]);
+  rows.push(['■ 作業ごと（この月に動いていた作業）']);
+  rows.push(['品番','部品名','開始','終了','状態','この月の個数','合計個数','日別個数','停止回数','停止合計(分・休憩を含む)','停止の内訳（分）','備考']);
+  const stLabel = st => st==='running'?'稼働中':st==='stopped'?'停止中':st==='overnight'?'持ち越し':'完了';
+  store.records.filter(r=> r.machineId===mid && new Date(r.startTime).getTime() < toT && endRefT(r) >= fromT)
+    .sort((a, b)=> new Date(a.startTime) - new Date(b.startTime)).forEach(r=>{
+      const dc = r.dailyCounts||[];
+      const inMonth = dc.filter(x=> (x.date||'').startsWith(ymKey)).reduce((a, x)=> a + (x.qty||0), 0);
+      const ref = endRefT(r), byReason = {};
+      (r.stops||[]).forEach(st=>{ const k = st.reason + (st.detail==='後から追加' ? '（後から追加）' : ''); byReason[k] = (byReason[k]||0) + durMin(st.from, st.to || ref); });
+      rows.push([
+        r.partNo||'', recPartName(r), r.startTime ? fmtFull(r.startTime) : '', r.endTime ? fmtFull(r.endTime) : '', stLabel(r.status),
+        inMonth, (dc.length || r.status==='done') ? recordTotalQty(r) : '',
+        dc.map(x=> `${(x.date||'').slice(5).replace('-','/')}:${x.qty||0}`).join(' / '),
+        (r.stops||[]).length, totalStopMin(r),
+        Object.entries(byReason).sort((a, b)=> b[1]-a[1]).map(([k, v])=> `${k} ${v}`).join(' / '),
+        r.note||''
+      ]);
+      tot.jobs++;
+    });
+  return { rows, tot };
+}
+async function exportMonthlyXlsx(ym, auto){
+  const [y, m] = ym.split('-').map(Number);
+  const lastKey = dateKey(new Date(y, m, 0));
+  await loadRecordsRange(ym + '-01', lastKey);   // 古い月は、その月の記録を読み込んでから
+  let X;
+  try{ X = await loadXlsxLib(); }
+  catch(e){ toast('エクセルを作る部品を読み込めませんでした（インターネットにつながっているか確かめてください）', 'error'); return false; }
+  const prefix = ym + '-';
+  const ids = store.machines.map(x=> x.id);
+  store.records.forEach(r=>{ if(!ids.includes(r.machineId) && (dateKey(new Date(r.startTime)) <= lastKey && dateKey(new Date(endRefT(r))) >= prefix + '01')) ids.push(r.machineId); });
+  const wb = X.utils.book_new();
+  const sumRows = [[`全機械のまとめ　${monthLabel(ym)}`], [], ['機械','機械名','動いた日数','平均稼働率(%)','稼働(分)','止まっていた(分)','記録した停止(分)','個数','作業数']];
+  const sheets = [];
+  const all = { days:0, run:0, notRun:0, logged:0, win:0, qty:0, jobs:0 };
+  ids.forEach(mid=>{
+    const { rows, tot } = monthlyMachineSheet(mid, ym);
+    sumRows.push([mid, machineName(mid), tot.days, tot.rate, tot.run, tot.notRun, tot.logged, tot.qty, tot.jobs]);
+    ['run','notRun','logged','win','qty','jobs'].forEach(k=> all[k] += tot[k]);
+    sheets.push([mid, rows]);
+  });
+  sumRows.push(['合計', '', '', all.win ? Math.round(all.run / all.win * 100) : null, all.run, all.notRun, all.logged, all.qty, all.jobs]);
+  const sumWs = X.utils.aoa_to_sheet(sumRows);
+  sumWs['!cols'] = [10, 14, 10, 13, 10, 14, 14, 10, 8].map(w=> ({ wch:w }));
+  X.utils.book_append_sheet(wb, sumWs, 'まとめ');
+  const used = new Set(['まとめ']);
+  sheets.forEach(([mid, rows])=>{
+    let name = String(mid).replace(/[\[\]:*?\/\\]/g, '_').slice(0, 31) || '機械';
+    while(used.has(name)) name = (name + '_').slice(-31);
+    used.add(name);
+    const ws = X.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [17, 16, 17, 17, 14, 14, 10, 9, 9, 40, 40, 20].map(w=> ({ wch:w }));
+    X.utils.book_append_sheet(wb, ws, name);
+  });
+  X.writeFile(wb, `プレス日報_${monthLabel(ym)}.xlsx`);
+  toast(`${monthLabel(ym)}の記録をエクセルでダウンロードしました` + (auto ? '（毎月の自動ダウンロード）' : ''), 'success');
+  return true;
+}
+function openXlsxSheet(){
+  $('#xlsxMonth').value = prevMonthKey();
+  $('#xlsxSheet').classList.add('active');
+}
+function closeXlsxSheet(){ $('#xlsxSheet').classList.remove('active'); }
+async function saveXlsxSheet(){
+  const ym = $('#xlsxMonth').value;
+  if(!/^\d{4}-\d{2}$/.test(ym)){ toast('月を選んでください', 'error'); return; }
+  closeXlsxSheet();
+  toast('エクセルを作っています…');
+  await exportMonthlyXlsx(ym, false);
+}
+// パソコンで、月が変わって最初に（最新の内容が届いてから）先月分を自動でダウンロードする
+let monthlyXlsxBusy = false;
+async function maybeMonthlyXlsx(){
+  if(!isPC || monthlyXlsxBusy || !autoOk() || localOnly) return;
+  const ym = prevMonthKey();
+  let done = '';
+  try{ done = localStorage.getItem(MONTHLY_XLSX_KEY) || ''; }catch(e){ return; }
+  if(done >= ym) return;
+  monthlyXlsxBusy = true;
+  try{
+    if(await exportMonthlyXlsx(ym, true)){ try{ localStorage.setItem(MONTHLY_XLSX_KEY, ym); }catch(e){} }
+  } finally { monthlyXlsxBusy = false; }
 }
 function csvCell(v){ v = String(v==null?'':v); return /[",\r\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
 function fmtFull(iso){ const d=new Date(iso); return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
@@ -6363,7 +6510,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.80';
+const APP_VERSION = '2026-06-28.81';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
