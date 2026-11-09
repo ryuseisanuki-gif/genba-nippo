@@ -3256,8 +3256,13 @@ function resolveAutoVsManual(){
     const autos   = list.filter(r=>r.auto===true);
     const manuals = list.filter(r=>r.auto!==true);
     if(!autos.length || !manuals.length) return;
-    const keep = pickRec(manuals);
     autos.forEach(a=>{
+      // 時間が重なっている時（同じ作業が2つできた時）だけまとめる。
+      // 自動の記録を終えてから次の作業を始めた時（時間が続いているだけ）は、両方残す（2026-11-09：P-1 の朝 8:45〜10:38 が消えた）
+      const as = new Date(a.startTime).getTime(), ae = endRefT(a);
+      const over = manuals.filter(m=> new Date(m.startTime).getTime() < ae && endRefT(m) > as);
+      if(!over.length) return;
+      const keep = pickRec(over);
       keep.stops = keep.stops || [];
       (a.stops||[]).forEach(s=>{
         const sf=new Date(s.from).getTime(), st=s.to?new Date(s.to).getTime():Infinity;
@@ -3272,9 +3277,9 @@ function resolveAutoVsManual(){
       (a.dailyCounts||[]).forEach(dc=>{
         if(!keep.dailyCounts.some(x=>x.date===dc.date)) keep.dailyCounts.push(dc);   // 同じ日の二重計上は防ぐ
       });
+      keep.stops.sort((x,y)=> new Date(x.from)-new Date(y.from));
       drop.push(a.id);
     });
-    keep.stops.sort((x,y)=> new Date(x.from)-new Date(y.from));
   });
   if(!drop.length) return false;
   store.records = store.records.filter(r=> !drop.includes(r.id));
@@ -6799,7 +6804,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.86';
+const APP_VERSION = '2026-06-28.87';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
