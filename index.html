@@ -535,6 +535,12 @@
   .sum-bar .seg.idle{background:var(--pause);}
   .sum-bar .seg.idlestop{background:repeating-linear-gradient(45deg,#b5790a,#b5790a 3px,#e6ad46 3px,#e6ad46 6px);}
   .sum-bar .seg.nowork{background:#b8c0cc;}
+  .sum-bar .seg.idlerun,.sum-legend i.idlerun{background:repeating-linear-gradient(45deg,var(--run),var(--run) 3px,#7fcf9a 3px,#7fcf9a 6px);}
+  #addStopChips .chip.run-chip{border-color:var(--run);color:var(--run);}
+  #addStopChips .chip.run-chip.sel{background:var(--run);color:#fff;}
+  .es-del{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:13px;font-weight:700;color:var(--run);}
+  .es-del input{width:18px;height:18px;}
+  .es-row.del .time-row{opacity:.4;}
   .sum-legend i.nowork{background:#b8c0cc;}
   .idle-gap{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 10px;border-radius:10px;background:var(--pause-bg);color:var(--pause-d);font-size:12.5px;font-weight:700;}
   .idle-gap span{flex:1;}
@@ -1266,8 +1272,9 @@
       <button class="chip" onclick="selAddStopChip(this)">作業者不在</button>
       <button class="chip" onclick="selAddStopChip(this)">その他</button>
       <button class="chip" onclick="selAddStopChip(this)">作業なし</button>
+      <button class="chip run-chip" onclick="selAddStopChip(this)">作業中</button>
     </div>
-    <div class="set-note" style="margin:-2px 0 8px">作業記録が無い時間（作業を終えて次を始めていない時など）にも入れられます。「作業なし」は、仕事が無くて動かさなかった時間です。止まっていた時間に数えません（稼働率に入りません）。</div>
+    <div class="set-note" style="margin:-2px 0 8px">作業記録が無い時間（作業を終えて次を始めていない時など）にも入れられます。「作業なし」は、仕事が無くて動かさなかった時間です。止まっていた時間に数えません（稼働率に入りません）。「作業中」は、ほんとうは動いていた時間です。動いている時間に数えます。</div>
     <div class="time-row">
       <label>開始<input type="time" id="addStopFrom" oninput="addStopCalc()"></label>
       <label>終了<input type="time" id="addStopTo" oninput="addStopCalc()"></label>
@@ -4061,7 +4068,7 @@ function machineDayStatesRaw(machineId, dayDate){
     if(!activeRec){
       // 作業記録が無い時間：理由が入っていれば その理由（「作業なし」は数えない）、無ければ「記録の無い時間」
       const n = idles.find(x=> t>=x.fT && t<x.tT);
-      if(n){ s = n.reason===IDLE_NOWORK ? 'nowork' : 'idlestop'; idleR[i] = n.reason; }
+      if(n){ s = n.reason===IDLE_NOWORK ? 'nowork' : n.reason===IDLE_RUN ? 'idlerun' : 'idlestop'; idleR[i] = n.reason; }
       else s = 'idle';
     }
     if(inBreak(dayDate,t)){
@@ -4082,9 +4089,11 @@ function machineDayStatesRaw(machineId, dayDate){
 // Compute one machine's stats for the given calendar day (休憩は停止として計上).
 function summaryFor(machineId, dayDate){
   const { states, total, idleR } = machineDayStates(machineId, dayDate);
-  let runMin=0, breakMin=0, remainCount=0, noWorkMin=0, idleMin=0; const idleReasons={};
+  let runMin=0, breakMin=0, remainCount=0, noWorkMin=0, idleMin=0, idleRunMin=0; const idleReasons={};
   states.forEach((s,i)=>{
-    if(s==='run') runMin++; else if(s==='break') breakMin++; else if(s==='remain') remainCount++;
+    if(s==='run') runMin++;
+    else if(s==='idlerun'){ runMin++; idleRunMin++; }   // 作業記録は無いが「作業中」と入れた時間＝動いている
+    else if(s==='break') breakMin++; else if(s==='remain') remainCount++;
     else if(s==='nowork') noWorkMin++;
     else if(s==='idle') idleMin++;
     else if(s==='idlestop'){ const k = idleR[i] + '（作業記録なし）'; idleReasons[k] = (idleReasons[k]||0) + 1; }
@@ -4138,7 +4147,7 @@ function summaryFor(machineId, dayDate){
   });
   const target = (spm>0 && spp>0) ? Math.round(runMin * spm / spp) : null;
   Object.entries(idleReasons).forEach(([k, v])=>{ reasons[k] = (reasons[k]||0) + v; loggedStopMin += v; });
-  return { runMin, notRun: stopMin, breakMin, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, workWindow, qty, cumQty, target, finishedCount, rate, reasons, noWorkMin, idleMin };
+  return { runMin, notRun: stopMin, breakMin, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, workWindow, qty, cumQty, target, finishedCount, rate, reasons, noWorkMin, idleMin, idleRunMin };
 }
 
 // 実時刻ベースの帯グラフ用タイムライン（machineDayStates を run/stop/remain の帯に集約）
@@ -4350,12 +4359,12 @@ function renderSummary(){
     const rateCls = s.rate==null ? 'none' : (s.rate>=60 ? '' : 'low');
     const reasonKeys = Object.keys(s.reasons);
     const isIdleKey = k=> k.indexOf('（作業記録なし）')>=0;
-    const reasonsHtml = (reasonKeys.length || s.noWorkMin) ? `
+    const reasonsHtml = (reasonKeys.length || s.noWorkMin || s.idleRunMin) ? `
       <div class="sum-reasons"><span class="rh">記録された停止</span>${
         reasonKeys.map(k=> isIdleKey(k)
           ? `<span class="rr added" onclick="openIdleNotes('${esc(m.id)}','${esc(k.replace('（作業記録なし）',''))}')">${esc(k)} ${durLabel(Math.round(s.reasons[k]))} <span class="rr-edit">✎</span></span>`
           : `<span class="rr${k.indexOf('後から追加')>=0?' added':''}" onclick="openEditStops('${esc(m.id)}','${esc(k)}')">${esc(k)} ${durLabel(Math.round(s.reasons[k]))} <span class="rr-edit">✎</span></span>`).join('')
-      }${s.noWorkMin?`<span class="rr" onclick="openIdleNotes('${esc(m.id)}',IDLE_NOWORK)">作業なし ${durLabel(s.noWorkMin)}（数えない） <span class="rr-edit">✎</span></span>`:''}</div>` : '';
+      }${s.noWorkMin?`<span class="rr" onclick="openIdleNotes('${esc(m.id)}',IDLE_NOWORK)">作業なし ${durLabel(s.noWorkMin)}（数えない） <span class="rr-edit">✎</span></span>`:''}${s.idleRunMin?`<span class="rr" onclick="openIdleNotes('${esc(m.id)}',IDLE_RUN)">作業中（後から入れた） ${durLabel(s.idleRunMin)} <span class="rr-edit">✎</span></span>`:''}</div>` : '';
     const gapsHtml = idleGaps(m.id, d).map(g=> `<div class="idle-gap"><span>⚠ 作業記録の無い時間 ${g.label}（${durLabel(g.min)}）</span><button onclick="openAddStop('${esc(m.id)}','${g.from}','${g.to}')">理由を入れる</button></div>`).join('');
     return `
     <div class="sum-card">
@@ -4368,7 +4377,7 @@ function renderSummary(){
         ${summaryTimeline(m.id, d).map(seg=>`<div class="seg ${seg.state}" style="width:${seg.pct}%"></div>`).join('')}
       </div>
       <div class="sum-scale"><span>${stdStartLabel(d)}</span><span>${(()=>{const sc=stdFor(d);const mid=sc.sh*60+sc.sm+Math.round(stdMin(d)/2);return pad(Math.floor(mid/60))+':'+pad(mid%60);})()}</span><span>${stdEndLabel(d)}</span></div>
-      <div class="sum-legend"><span><i class="run"></i>動いている</span><span><i class="stop"></i>止まっている</span><span><i class="break"></i>休憩</span><span><i class="addstop"></i>後から追加</span>${s.noWorkMin?'<span><i class="nowork"></i>作業なし</span>':''}</div>
+      <div class="sum-legend"><span><i class="run"></i>動いている</span><span><i class="stop"></i>止まっている</span><span><i class="break"></i>休憩</span><span><i class="addstop"></i>後から追加</span>${s.noWorkMin?'<span><i class="nowork"></i>作業なし</span>':''}${s.idleRunMin?'<span><i class="idlerun"></i>作業中（後から）</span>':''}</div>
       <div class="sum-stats">
         <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
         <div class="ss"><div class="lab"><span class="dot stop"></span>止まっている</div><div class="val stop">${durLabel(s.notRun)}</div></div>
@@ -4394,17 +4403,21 @@ function openAddStop(machineId, from, to){
   const coil = from ? null : [...document.querySelectorAll('#addStopChips .chip')].find(c=>c.textContent==='コイル交換');
   if(coil) coil.classList.add('sel');
   $('#addStopFrom').value = from || ''; $('#addStopTo').value = to || ''; $('#addStopCalc').textContent='';
-  if(from && to) addStopCalc();
+  addStopCalc();
   $('#addStopSheet').classList.add('active');
 }
 function closeAddStop(){ $('#addStopSheet').classList.remove('active'); }
-function selAddStopChip(el){ document.querySelectorAll('#addStopChips .chip').forEach(c=>c.classList.remove('sel')); el.classList.add('sel'); }
+function selAddStopChip(el){ document.querySelectorAll('#addStopChips .chip').forEach(c=>c.classList.remove('sel')); el.classList.add('sel'); addStopCalc(); }
 function addStopCalc(){
+  const sel0 = document.querySelector('#addStopChips .chip.sel');
+  $('#addStopSheet .b-ok').textContent = (sel0 && sel0.textContent===IDLE_RUN) ? '作業中にする' : '停止を追加';
   const f=$('#addStopFrom').value, t=$('#addStopTo').value;
   if(!f||!t){ $('#addStopCalc').textContent=''; return; }
   const [fh,fm]=f.split(':').map(Number), [th,tm]=t.split(':').map(Number);
   const min=(th*60+tm)-(fh*60+fm);
-  $('#addStopCalc').textContent = min>0 ? (min+'分間の停止として追加します') : '終了は開始より後にしてください';
+  const sel = document.querySelector('#addStopChips .chip.sel');
+  const isRun = sel && sel.textContent===IDLE_RUN;
+  $('#addStopCalc').textContent = min>0 ? (min + (isRun ? '分間を「作業中（動いていた）」にします' : '分間の停止として追加します')) : '終了は開始より後にしてください';
 }
 async function confirmAddStop(){
   const chip=document.querySelector('#addStopChips .chip.sel');
@@ -4423,17 +4436,26 @@ async function confirmAddStop(){
   const reason = chip.textContent;
   if(!rec){
     // 作業記録の無い時間：記録の無い時間の理由として入れる（作業記録とまたいでいる時は分けてもらう）
-    const fT = from.getTime(), tT = to.getTime();
+    let fT = from.getTime(), tT = to.getTime();
+    // 画面の時刻は分単位なので、作業記録の始まり・終わりと1分未満だけ重なる時は、記録の境目に合わせる（例：記録が 10:38:35 に始まり、入力が 〜10:39）
+    store.records.forEach(r=>{
+      if(r.machineId!==addStopMachineId) return;
+      const rs = new Date(r.startTime).getTime(), re = endRefT(r);
+      if(rs > fT && rs < tT && tT - rs < 60000) tT = rs;
+      if(re > fT && re < tT && re - fT < 60000) fT = re;
+    });
+    from.setTime(fT); to.setTime(tT);
     const over = store.records.some(r=> r.machineId===addStopMachineId && new Date(r.startTime).getTime() < tT && endRefT(r) > fT);
     if(over){ toast('作業記録がある時間と無い時間をまたいでいます。分けて入れてください','error'); return; }
     if(tT > nowMs()){ toast('まだ来ていない時間には入れられません','error'); return; }
     idleNoteSet(uid(), { m:addStopMachineId, from:from.toISOString(), to:to.toISOString(), reason, at:nowIso() });
     closeAddStop();
-    toast(reason===IDLE_NOWORK ? '「作業なし」を入れました（止まっていた時間に数えません）' : `作業記録の無い時間に「${reason}」を入れました`, 'success');
+    toast(reason===IDLE_NOWORK ? '「作業なし」を入れました（止まっていた時間に数えません）' : reason===IDLE_RUN ? '「作業中」を入れました（動いている時間に数えます）' : `作業記録の無い時間に「${reason}」を入れました`, 'success');
     renderSummary();
     return;
   }
   if(reason===IDLE_NOWORK){ toast('この時間は作業記録があります。「作業なし」は作業記録の無い時間だけに使えます','error'); return; }
+  if(reason===IDLE_RUN){ toast('この時間は作業記録があります。止まっていた記録を作業中に直すときは「記録された停止」の ✎ から「作業中だった」を選んでください','error'); return; }
   rec.stops = rec.stops || [];
   rec.stops.push({ reason: chip.textContent, detail:'後から追加', from: from.toISOString(), to: to.toISOString() });
   save();
@@ -4448,6 +4470,7 @@ async function confirmAddStop(){
    ほかの理由は停止として数え、停止の内訳に「○○（作業記録なし）」と出る。
    他の端末の分を消さないよう、1件ずつ足す・消す（orderDel と同じ書き方） */
 const IDLE_NOWORK = '作業なし';
+const IDLE_RUN = '作業中';   // 作業記録は無いが、ほんとうは動いていた時間（動いている時間に数える）
 function idleNotes(){ const d = (store.settings||[]).find(x=> x.id==='idleNotes'); return (d && d.ids) || {}; }
 function idleNoteList(machineId){
   return Object.entries(idleNotes()).filter(([id, v])=> v && v.m===machineId && v.from && v.to).map(([id, v])=> Object.assign({ id }, v));
@@ -4515,7 +4538,7 @@ function openEditStops(machineId, reasonKey){
       rows.push(`<div class="es-row"><div class="time-row">
         <label>開始<input type="time" id="es-from-${ri}" value="${hhmm(new Date(s.from))}"></label>
         <label>終了<input type="time" id="es-to-${ri}" value="${s.to?hhmm(new Date(s.to)):''}"></label>
-      </div></div>`);
+      </div><label class="es-del"><input type="checkbox" id="es-del-${ri}" onchange="this.closest('.es-row').classList.toggle('del', this.checked)">作業中だった（この停止を消して、動いていたことにする）</label></div>`);
     });
   });
   if(!rows.length){ toast('編集できる停止がありません','error'); return; }
@@ -4530,6 +4553,7 @@ async function saveEditStop(){
   // 入力を先に読んで確かめる
   let ok = true;
   const vals = editStopRefs.map((ref,ri)=>{
+    if(($('#es-del-'+ri)||{}).checked) return { ref, del:true };
     const fv = ($('#es-from-'+ri)||{}).value, tv = ($('#es-to-'+ri)||{}).value;
     if(!fv){ ok=false; return null; }
     const [fh,fm]=fv.split(':').map(Number);
@@ -4557,7 +4581,12 @@ async function saveEditStop(){
     if(!(await p)){ closeEditStop(); renderSummary(); toast('最新の内容にしました。確かめてから、もう一度直してください'); return; }
     if(!(await confirmDialog('本当に上書きしますか？', '先に保存された内容が、この端末の入力で置き換わります。', '上書きする', true))){ closeEditStop(); renderSummary(); return; }
   }
-  vals.forEach(v=>{ const st = findStop(v.ref); if(st){ st.from = v.from; st.to = v.to; } });
+  let delN = 0;
+  vals.forEach(v=>{
+    const st = findStop(v.ref); if(!st) return;
+    if(v.del){ const r = store.records.find(x=> x.id===v.ref.recId); r.stops = r.stops.filter(x=> x!==st); delN++; }
+    else { st.from = v.from; st.to = v.to; }
+  });
   // 開いていた停止を閉じたら、停止中のレコードは稼働中に戻す
   [...new Set(editStopRefs.map(x=>x.recId))].forEach(id=>{
     const r = store.records.find(x=>x.id===id);
@@ -4565,7 +4594,7 @@ async function saveEditStop(){
   });
   save();
   closeEditStop();
-  toast('停止時間を修正しました','success');
+  toast(delN ? `停止を${delN}件消して、動いていたことにしました` : '停止時間を修正しました','success');
   renderSummary(); renderMachineGrid(); renderStatus(); renderRecords();
 }
 
@@ -6770,7 +6799,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.85';
+const APP_VERSION = '2026-06-28.86';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
