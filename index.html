@@ -523,6 +523,14 @@
   .sum-legend i.break{background:#4a6fd0;}
   .sum-bar .seg.addstop{background:repeating-linear-gradient(45deg,#b5790a,#b5790a 3px,#e6ad46 3px,#e6ad46 6px);}
   .sum-legend i.addstop{background:repeating-linear-gradient(45deg,#b5790a,#b5790a 3px,#e6ad46 3px,#e6ad46 6px);}
+  /* 作業記録の無い時間：理由なし（止まっている扱い）／理由あり／作業なし（数えない） */
+  .sum-bar .seg.idle{background:var(--pause);}
+  .sum-bar .seg.idlestop{background:repeating-linear-gradient(45deg,#b5790a,#b5790a 3px,#e6ad46 3px,#e6ad46 6px);}
+  .sum-bar .seg.nowork{background:#b8c0cc;}
+  .sum-legend i.nowork{background:#b8c0cc;}
+  .idle-gap{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 10px;border-radius:10px;background:var(--pause-bg);color:var(--pause-d);font-size:12.5px;font-weight:700;}
+  .idle-gap span{flex:1;}
+  .idle-gap button{flex:none;padding:6px 10px;border-radius:8px;border:none;background:var(--pause);color:#fff;font-weight:800;font-size:12px;}
   .sum-scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--ink3);margin-top:3px;padding:0 1px;}
   .sum-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:13px;}
   .ss{background:var(--surface2);border-radius:10px;padding:9px 8px;text-align:center;}
@@ -1243,7 +1251,9 @@
       <button class="chip" onclick="selAddStopChip(this)">段取り替え</button>
       <button class="chip" onclick="selAddStopChip(this)">作業者不在</button>
       <button class="chip" onclick="selAddStopChip(this)">その他</button>
+      <button class="chip" onclick="selAddStopChip(this)">作業なし</button>
     </div>
+    <div class="set-note" style="margin:-2px 0 8px">作業記録が無い時間（作業を終えて次を始めていない時など）にも入れられます。「作業なし」は、仕事が無くて動かさなかった時間です。止まっていた時間に数えません（稼働率に入りません）。</div>
     <div class="time-row">
       <label>開始<input type="time" id="addStopFrom" oninput="addStopCalc()"></label>
       <label>終了<input type="time" id="addStopTo" oninput="addStopCalc()"></label>
@@ -1843,7 +1853,7 @@ function syncPush(){
   (store.workdays||[]).forEach(w=> cur['workdays/'+w.id] = w);
   // 品番・設定・注文は、この端末がサーバーの内容を受け取ってから送る（受け取る前に送ると、手元の古い内容でサーバーを上書きしてしまう）
   if(firstSnap.parts) (store.parts||[]).forEach(p=> cur['parts/'+p.id] = p);
-  if(firstSnap.settings) (store.settings||[]).forEach(s=>{ if(s.id!=='orderDel') cur['settings/'+s.id] = s; });   // 消した注文の印は orderTombWrite で足していく
+  if(firstSnap.settings) (store.settings||[]).forEach(s=>{ if(s.id!=='orderDel' && s.id!=='idleNotes') cur['settings/'+s.id] = s; });   // idleNotes も idleNoteWrite で1件ずつ   // 消した注文の印は orderTombWrite で足していく
   const tombs = orderTombs();
   if(firstSnap.orders && !isDemo() && !planEdit) (store.orders||[]).forEach(o=>{ if(!isTombed(o, tombs)) cur['orders/'+o.id] = o; });   // デモ中・予定の編集中（確定前）は送らない
   // 追加・変更
@@ -4012,6 +4022,8 @@ function machineDayStatesRaw(machineId, dayDate){
   const now=nowMs();
   const total=Math.max(1, Math.round((weFullT-wsT)/60000));
   const recs=store.records.filter(r=>r.machineId===machineId);
+  const idles=idleNoteList(machineId).map(n=>({ fT:new Date(n.from).getTime(), tT:new Date(n.to).getTime(), reason:n.reason }));
+  const idleR={};   // 分の番号 → 記録の無い時間に入れた理由
   const states=new Array(total);
   for(let i=0;i<total;i++){
     const t=wsT+i*60000;
@@ -4032,6 +4044,12 @@ function machineDayStatesRaw(machineId, dayDate){
         break;
       }
     }
+    if(!activeRec){
+      // 作業記録が無い時間：理由が入っていれば その理由（「作業なし」は数えない）、無ければ「記録の無い時間」
+      const n = idles.find(x=> t>=x.fT && t<x.tT);
+      if(n){ s = n.reason===IDLE_NOWORK ? 'nowork' : 'idlestop'; idleR[i] = n.reason; }
+      else s = 'idle';
+    }
     if(inBreak(dayDate,t)){
       // 休憩中：動いていなければ休憩。動いていても「休憩停止から明示的に再開した後」だけ稼働(緑)にする
       if(s==='run'){
@@ -4044,15 +4062,20 @@ function machineDayStatesRaw(machineId, dayDate){
     }
     states[i]=s;
   }
-  return { states, total, wsT };
+  return { states, total, wsT, idleR };
 }
 
 // Compute one machine's stats for the given calendar day (休憩は停止として計上).
 function summaryFor(machineId, dayDate){
-  const { states, total } = machineDayStates(machineId, dayDate);
-  let runMin=0, breakMin=0, remainCount=0;
-  states.forEach(s=>{ if(s==='run') runMin++; else if(s==='break') breakMin++; else if(s==='remain') remainCount++; });
-  const elapsed = total - remainCount;
+  const { states, total, idleR } = machineDayStates(machineId, dayDate);
+  let runMin=0, breakMin=0, remainCount=0, noWorkMin=0, idleMin=0; const idleReasons={};
+  states.forEach((s,i)=>{
+    if(s==='run') runMin++; else if(s==='break') breakMin++; else if(s==='remain') remainCount++;
+    else if(s==='nowork') noWorkMin++;
+    else if(s==='idle') idleMin++;
+    else if(s==='idlestop'){ const k = idleR[i] + '（作業記録なし）'; idleReasons[k] = (idleReasons[k]||0) + 1; }
+  });
+  const elapsed = total - remainCount - noWorkMin;   // 「作業なし」の時間は数えない
   const stopMin = Math.max(0, elapsed - runMin - breakMin);   // 止まっている（休憩を除く）
   const workWindow = Math.max(0, elapsed - breakMin);          // 実働可能時間（定時−休憩）
   const remain = remainCount;
@@ -4100,7 +4123,8 @@ function summaryFor(machineId, dayDate){
     if(rel && r.spm>0 && r.spp>0){ spm=r.spm; spp=r.spp; }
   });
   const target = (spm>0 && spp>0) ? Math.round(runMin * spm / spp) : null;
-  return { runMin, notRun: stopMin, breakMin, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, workWindow, qty, cumQty, target, finishedCount, rate, reasons };
+  Object.entries(idleReasons).forEach(([k, v])=>{ reasons[k] = (reasons[k]||0) + v; loggedStopMin += v; });
+  return { runMin, notRun: stopMin, breakMin, loggedStopMin:Math.round(loggedStopMin), remain, elapsed, workWindow, qty, cumQty, target, finishedCount, rate, reasons, noWorkMin, idleMin };
 }
 
 // 実時刻ベースの帯グラフ用タイムライン（machineDayStates を run/stop/remain の帯に集約）
@@ -4311,10 +4335,14 @@ function renderSummary(){
     const remPct  = dayMin ? (s.remain/dayMin*100) : 0;
     const rateCls = s.rate==null ? 'none' : (s.rate>=60 ? '' : 'low');
     const reasonKeys = Object.keys(s.reasons);
-    const reasonsHtml = reasonKeys.length ? `
+    const isIdleKey = k=> k.indexOf('（作業記録なし）')>=0;
+    const reasonsHtml = (reasonKeys.length || s.noWorkMin) ? `
       <div class="sum-reasons"><span class="rh">記録された停止</span>${
-        reasonKeys.map(k=>`<span class="rr${k.indexOf('後から追加')>=0?' added':''}" onclick="openEditStops('${esc(m.id)}','${esc(k)}')">${esc(k)} ${durLabel(Math.round(s.reasons[k]))} <span class="rr-edit">✎</span></span>`).join('')
-      }</div>` : '';
+        reasonKeys.map(k=> isIdleKey(k)
+          ? `<span class="rr added" onclick="openIdleNotes('${esc(m.id)}','${esc(k.replace('（作業記録なし）',''))}')">${esc(k)} ${durLabel(Math.round(s.reasons[k]))} <span class="rr-edit">✎</span></span>`
+          : `<span class="rr${k.indexOf('後から追加')>=0?' added':''}" onclick="openEditStops('${esc(m.id)}','${esc(k)}')">${esc(k)} ${durLabel(Math.round(s.reasons[k]))} <span class="rr-edit">✎</span></span>`).join('')
+      }${s.noWorkMin?`<span class="rr" onclick="openIdleNotes('${esc(m.id)}',IDLE_NOWORK)">作業なし ${durLabel(s.noWorkMin)}（数えない） <span class="rr-edit">✎</span></span>`:''}</div>` : '';
+    const gapsHtml = idleGaps(m.id, d).map(g=> `<div class="idle-gap"><span>⚠ 作業記録の無い時間 ${g.label}（${durLabel(g.min)}）</span><button onclick="openAddStop('${esc(m.id)}','${g.from}','${g.to}')">理由を入れる</button></div>`).join('');
     return `
     <div class="sum-card">
       <div class="sum-head">
@@ -4326,7 +4354,7 @@ function renderSummary(){
         ${summaryTimeline(m.id, d).map(seg=>`<div class="seg ${seg.state}" style="width:${seg.pct}%"></div>`).join('')}
       </div>
       <div class="sum-scale"><span>${stdStartLabel(d)}</span><span>${(()=>{const sc=stdFor(d);const mid=sc.sh*60+sc.sm+Math.round(stdMin(d)/2);return pad(Math.floor(mid/60))+':'+pad(mid%60);})()}</span><span>${stdEndLabel(d)}</span></div>
-      <div class="sum-legend"><span><i class="run"></i>動いている</span><span><i class="stop"></i>止まっている</span><span><i class="break"></i>休憩</span><span><i class="addstop"></i>後から追加</span></div>
+      <div class="sum-legend"><span><i class="run"></i>動いている</span><span><i class="stop"></i>止まっている</span><span><i class="break"></i>休憩</span><span><i class="addstop"></i>後から追加</span>${s.noWorkMin?'<span><i class="nowork"></i>作業なし</span>':''}</div>
       <div class="sum-stats">
         <div class="ss"><div class="lab"><span class="dot run"></span>動いている</div><div class="val run">${durLabel(s.runMin)}</div></div>
         <div class="ss"><div class="lab"><span class="dot stop"></span>止まっている</div><div class="val stop">${durLabel(s.notRun)}</div></div>
@@ -4334,6 +4362,7 @@ function renderSummary(){
         <div class="ss"><div class="lab">生産個数（本日）</div><div class="val qty">${s.qty.toLocaleString()}個</div>${s.cumQty>s.qty?`<div class="qty-sub">累計 ${s.cumQty.toLocaleString()}個</div>`:''}${s.target!=null?`<div class="qty-sub">目標 ${s.target.toLocaleString()}個${s.target>0?` <span class="ach ${s.qty>=s.target?'ok':'low'}">達成 ${Math.round(s.qty/s.target*100)}%</span>`:''}</div>`:''}</div>
       </div>
       ${reasonsHtml}
+      ${gapsHtml}
       <div class="sum-jobs">記録 ${s.finishedCount}件${s.remain>0 && s.elapsed>0?' ・ 残り定時 '+durLabel(s.remain):''}</div>
       <button class="add-stop-btn" onclick="openAddStop('${esc(m.id)}')">＋ 停止を後から追加（押し忘れ）</button>
     </div>`;
@@ -4342,14 +4371,16 @@ function renderSummary(){
 
 /* ===== 停止を後から追加（押し忘れ対応） ===== */
 let addStopMachineId = null, addStopDate = null;
-function openAddStop(machineId){
+function openAddStop(machineId, from, to){
   addStopMachineId = machineId;
   addStopDate = new Date(summaryDate);
   $('#addStopMachine').textContent = machineId + ' ／ ' + fmtDate(summaryDate);
   document.querySelectorAll('#addStopChips .chip').forEach(c=>c.classList.remove('sel'));
-  const coil = [...document.querySelectorAll('#addStopChips .chip')].find(c=>c.textContent==='コイル交換');
+  // 記録の無い時間から開いた時は、理由を選んでもらう（コイル交換を先に選んでおかない）
+  const coil = from ? null : [...document.querySelectorAll('#addStopChips .chip')].find(c=>c.textContent==='コイル交換');
   if(coil) coil.classList.add('sel');
-  $('#addStopFrom').value=''; $('#addStopTo').value=''; $('#addStopCalc').textContent='';
+  $('#addStopFrom').value = from || ''; $('#addStopTo').value = to || ''; $('#addStopCalc').textContent='';
+  if(from && to) addStopCalc();
   $('#addStopSheet').classList.add('active');
 }
 function closeAddStop(){ $('#addStopSheet').classList.remove('active'); }
@@ -4375,13 +4406,81 @@ async function confirmAddStop(){
   const rec0 = find();
   await freshRecords(addStopMachineId, rec0 ? [rec0.id] : []);
   const rec = find();
-  if(!rec){ toast('その時間帯に作業記録がありません','error'); return; }
+  const reason = chip.textContent;
+  if(!rec){
+    // 作業記録の無い時間：記録の無い時間の理由として入れる（作業記録とまたいでいる時は分けてもらう）
+    const fT = from.getTime(), tT = to.getTime();
+    const over = store.records.some(r=> r.machineId===addStopMachineId && new Date(r.startTime).getTime() < tT && endRefT(r) > fT);
+    if(over){ toast('作業記録がある時間と無い時間をまたいでいます。分けて入れてください','error'); return; }
+    if(tT > nowMs()){ toast('まだ来ていない時間には入れられません','error'); return; }
+    idleNoteSet(uid(), { m:addStopMachineId, from:from.toISOString(), to:to.toISOString(), reason, at:nowIso() });
+    closeAddStop();
+    toast(reason===IDLE_NOWORK ? '「作業なし」を入れました（止まっていた時間に数えません）' : `作業記録の無い時間に「${reason}」を入れました`, 'success');
+    renderSummary();
+    return;
+  }
+  if(reason===IDLE_NOWORK){ toast('この時間は作業記録があります。「作業なし」は作業記録の無い時間だけに使えます','error'); return; }
   rec.stops = rec.stops || [];
   rec.stops.push({ reason: chip.textContent, detail:'後から追加', from: from.toISOString(), to: to.toISOString() });
   save();
   closeAddStop();
   toast('停止を追加しました','success');
   renderSummary(); renderMachineGrid(); renderStatus();
+}
+
+/* ===== 作業記録の無い時間の理由（settings/idleNotes の ids：id → { m:機械, from, to, reason, at }） =====
+   作業を終えて次を始めていない時間などは、どの作業記録にも入らない（止まっている扱い）。
+   そこに後から理由を入れる。「作業なし」は止まっていた時間に数えない（稼働率の分母から外す）。
+   ほかの理由は停止として数え、停止の内訳に「○○（作業記録なし）」と出る。
+   他の端末の分を消さないよう、1件ずつ足す・消す（orderDel と同じ書き方） */
+const IDLE_NOWORK = '作業なし';
+function idleNotes(){ const d = (store.settings||[]).find(x=> x.id==='idleNotes'); return (d && d.ids) || {}; }
+function idleNoteList(machineId){
+  return Object.entries(idleNotes()).filter(([id, v])=> v && v.m===machineId && v.from && v.to).map(([id, v])=> Object.assign({ id }, v));
+}
+function idleNoteSet(id, v){
+  store.settings = store.settings || [];
+  let d = store.settings.find(x=> x.id==='idleNotes');
+  if(!d){ d = { id:'idleNotes', ids:{} }; store.settings.push(d); }
+  d.ids = d.ids || {};
+  if(v === undefined) delete d.ids[id]; else d.ids[id] = v;
+  dataVer++;
+  try{ localStorage.setItem(KEY, storeJson()); }catch(e){}
+  idleNoteWrite(id, v);
+}
+function idleNoteWrite(id, v){
+  if(!fbReady || !db || !window.firebase) return;
+  const F = firebase.firestore;
+  if(v === undefined) db.collection('settings').doc('idleNotes').update(new F.FieldPath('ids', id), F.FieldValue.delete()).catch(e=> console.warn('idle del', e));
+  else db.collection('settings').doc('idleNotes').set({ id:'idleNotes', ids:{ [id]: v } }, { merge:true }).catch(e=> console.warn('idle', e));
+}
+// その日の「理由が入っていない記録の無い時間」（休憩をはさんでいても1つにまとめる）
+function idleGaps(machineId, dayDate){
+  if(!machineDayHasRecord(dayDate, machineId)) return [];   // その日に作業記録が1件も無い機械（使っていない日）は出さない
+  const { states, wsT } = machineDayStates(machineId, dayDate);
+  const hm = t=>{ const x = new Date(t); return pad(x.getHours()) + ':' + pad(x.getMinutes()); };
+  const out = []; let cur = null;
+  states.forEach((s, i)=>{
+    if(s==='idle'){ if(cur && cur.pend <= i){ cur.e = i + 1; cur.min += 1; } else { cur = { s:i, e:i+1, min:1, pend:i }; out.push(cur); } cur.pend = i + 1; }
+    else if(s==='break' && cur && cur.pend === i){ cur.pend = i + 1; }   // 休憩はつなぐ（数えない）
+    else cur = null;
+  });
+  return out.filter(g=> g.min >= 5).map(g=>{
+    const f = hm(wsT + g.s*60000), t = hm(wsT + g.e*60000);
+    return { from:f, to:t, min:g.min, label:`${f}〜${t}` };
+  });
+}
+// 入れた理由を見直す（消す）
+async function openIdleNotes(machineId, reason){
+  const dk = dateKey(summaryDate);
+  const list = idleNoteList(machineId).filter(n=> n.reason===reason && dateKey(new Date(n.from))===dk).sort((a, b)=> a.from < b.from ? -1 : 1);
+  if(!list.length){ toast('入れた理由が見つかりません','error'); return; }
+  const hm = iso=>{ const x = new Date(iso); return pad(x.getHours()) + ':' + pad(x.getMinutes()); };
+  for(const n of list){
+    const ok = await confirmDialog('入れた理由を消す', `${machineId} ／ ${fmtDate(summaryDate)}\n${hm(n.from)}〜${hm(n.to)} の「${n.reason}」を消しますか？\n（消すと、記録の無い時間に戻ります）`, '消す', true);
+    if(ok){ idleNoteSet(n.id, undefined); toast('消しました','success'); }
+  }
+  renderSummary();
 }
 
 /* ===== 停止時間の修正（記録された停止チップをタップ） ===== */
@@ -6594,7 +6693,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.83';
+const APP_VERSION = '2026-06-28.84';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
