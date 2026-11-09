@@ -261,6 +261,9 @@
   .btn-row .btn-big{flex:1;font-size:18px;min-height:60px;letter-spacing:.04em;}
   .btn-end-sm{background:var(--ink);}
   .btn-end-sm:active{background:#0d1620;}
+  /* 停止の押し間違いを取り消すボタン（再開・終了より控えめ） */
+  .btn-undo{width:100%;margin-top:9px;min-height:48px;border-radius:12px;border:2px solid var(--line2);background:#fff;color:var(--ink);font-size:16px;font-weight:800;}
+  .btn-undo:active{background:var(--line);}
   .lock-hint{font-size:12px;color:var(--ink3);text-align:center;margin-top:9px;}
   /* 待機中に出す「次の予定」 */
   .next-plan{background:var(--run-bg);border:1.5px solid #bfe3cb;border-radius:13px;padding:12px 14px 14px;margin-bottom:10px;text-align:left;}
@@ -2701,6 +2704,7 @@ function renderStatus(){
             <button class="btn-big btn-resume" onclick="resumeJob()"><span class="ic">▶</span>再開</button>
             <button class="btn-big btn-end-sm" onclick="openEndSheet()"><span class="ic">■</span>終了</button>
           </div>
+          ${isBreakStop ? '' : '<button class="btn-undo" onclick="cancelStop()">↩ 押し間違い — 停止を取り消す</button>'}
         </div>
       </div>`;
     tickTimer();
@@ -2988,6 +2992,30 @@ async function confirmStop(){
   renderMachineGrid();
   renderStatus();
   renderCoilSelect();
+}
+// 停止の押し間違い：その停止を記録から消して、止まっていなかった（ずっと稼働中だった）ことにする
+async function cancelStop(){
+  if(!(await freshShown('stopped'))) return;
+  const r = shownWith('stopped');
+  if(!r) return;
+  const os = openStop(r);
+  if(!os || os.reason==='休憩') return;
+  const mins = durMin(os.from, nowMs());
+  const ok = await confirmDialog('停止を取り消す',
+    `「${os.reason}」の停止を取り消して、稼働中に戻します。
+この停止は記録に残りません（止まっていなかった扱いになります）。` + (mins >= 1 ? `
+※ 停止してから ${durLabel(mins)} たっています。` : ''),
+    '取り消す', true);
+  if(!ok) return;
+  const r2 = shownWith('stopped');                     // 確認している間に他の端末で再開された時は何もしない
+  if(r2 !== r || !r.stops.includes(os) || os.to){ toast('この停止はもう終わっていました','error'); renderStatus(); return; }
+  r.stops = r.stops.filter(s=> s !== os);
+  closeOpenStopsAt(r, nowDate().toISOString());       // ほかに開いた停止が残っていれば閉じる
+  r.status = 'running';
+  save();
+  toast('停止を取り消しました（稼働中に戻しました）','success');
+  renderMachineGrid();
+  renderStatus();
 }
 async function resumeJob(){
   if(!(await freshShown('stopped'))) return;
@@ -6566,7 +6594,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.82';
+const APP_VERSION = '2026-06-28.83';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
