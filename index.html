@@ -453,6 +453,14 @@
   }
   /* 記録タブ：絞り込みチップ */
   .rec-chips{display:flex;gap:6px;margin-bottom:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
+  /* 予定：材料ごとの機械のまとまり（P-1・P-6・P-7 ／ P-5・P-8） */
+  .plan-groups{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+  .plan-groups button{padding:9px 14px;border-radius:12px;border:2px solid var(--line);background:#fff;color:var(--ink2);font-weight:800;font-size:13.5px;text-align:left;line-height:1.35;}
+  .plan-groups button small{display:block;font-size:11px;font-weight:600;color:var(--ink3);}
+  .plan-groups button.sel{border-color:var(--blue);background:rgba(26,111,196,.07);color:var(--ink);}
+  .coil-machs{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:12.5px;color:var(--ink2);}
+  .coil-machs b{font-weight:700;color:var(--ink3);margin-right:2px;}
+  .coil-machs label{display:flex;align-items:center;gap:4px;font-family:var(--mono);font-weight:700;}
   .rec-chips::-webkit-scrollbar{display:none;}
   .rchip{
     flex:0 0 auto;padding:9px 14px;border-radius:999px;border:1.5px solid var(--line2);
@@ -1032,6 +1040,7 @@
     <div class="day-label" id="planLabel" onclick="planThisMonth()">—</div>
     <button class="day-arrow" onclick="planMonthMove(1)">▶</button>
   </div>
+  <div class="plan-groups" id="planGroupChips" hidden></div>
   <div class="rec-chips" id="planMachChips"></div>
   <div class="plan-todo" id="planTodo" hidden></div>
   <div class="gantt-wrap"><div id="planGantt"></div></div>
@@ -1049,6 +1058,10 @@
     <button class="btn-add" id="planAddBtn" onclick="openOrderSheet()">＋ 注文を追加</button>
   </div>
   <div class="pool" id="planPool" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
+  <div id="planOtherWrap" hidden>
+    <div class="pool-head"><span class="t">📥 その他のプール</span><span class="s" id="planOtherSub"></span></div>
+    <div class="pool" id="planPoolOther" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
+  </div>
   <div class="kakou-info" id="kakouInfo"></div>
   <div class="set-note">速さは、その機械でその品番を作った日の記録（動いていた時間あたりの個数）から計算します。記録が5日未満の品番は理論値（回転数÷何回転で1個）で、1日の稼働を90%として計算します。土日祝と休止日は数えません。納期の日までに作り終われば「間に合う」です。</div>
   </div>
@@ -1090,8 +1103,9 @@
   </div>
 
   <div class="card set-card">
-    <h3>🧵 コイルの登録</h3>
+    <h3>🧵 コイル（材料）の登録</h3>
     <div id="coilSettingsList"></div>
+    <div class="set-note" style="margin-top:4px">「使う機械」を選ぶと、予定タブが材料ごとの機械のまとまり（例：P-1・P-6・P-7 ／ P-5・P-8）に分かれます。注文は、その材料のプールに出ます。材料が決まっていない注文や、どの機械にも付いていない材料の注文は「その他のプール」に出ます。</div>
     <div class="add-row">
       <input type="text" id="newCoilName" placeholder="コイル名称" autocomplete="off">
       <input type="number" id="newCoilStock" class="mi" inputmode="numeric" placeholder="在庫数" hidden>
@@ -5045,11 +5059,21 @@ function renderCoilSettings(){
   const el = $('#coilSettingsList'); if(!el) return;
   if(!store.coils.length){ el.innerHTML = '<div class="set-note">コイルが未登録です。下から追加してください。</div>'; return; }
   el.innerHTML = store.coils.map(c=>`
-    <div class="mset">
+    <div class="mset" style="flex-wrap:wrap">
       <span class="mi-name" style="flex:1">${esc(c.name)}</span>
       ${COIL_STOCK ? `<span class="coil-stock">残 <input type="number" inputmode="numeric" class="coil-stock-input" value="${esc(c.stock)}" onchange="updateCoilStock('${esc(c.id)}', this.value)"></span>` : ''}
       <button class="x" onclick="deleteCoil('${esc(c.id)}')">✕</button>
+      <div class="coil-machs"><b>使う機械</b>${store.machines.map(m=>`<label><input type="checkbox" ${(c.machines||[]).includes(m.id)?'checked':''} onchange="setCoilMachine('${esc(c.id)}','${esc(m.id)}',this.checked)">${esc(m.id)}</label>`).join('')}</div>
     </div>`).join('');
+}
+// 材料を使う機械を付ける・外す（予定タブのまとまりとプールが変わる）
+function setCoilMachine(coilId, machineId, on){
+  const c = store.coils.find(x=> x.id===coilId); if(!c) return;
+  const set = new Set((c.machines||[]).filter(id=> store.machines.some(m=> m.id===id)));
+  if(on) set.add(machineId); else set.delete(machineId);
+  c.machines = store.machines.map(m=> m.id).filter(id=> set.has(id));
+  save(); renderCoilSettings(); renderPlan();
+  toast(`${c.name}：使う機械 ${c.machines.length ? c.machines.join('・') : 'なし'}`, 'success');
 }
 function renderShutdownSettings(){
   const el=$('#shutdownList'); if(!el) return;
@@ -5538,8 +5562,37 @@ function coilUseMap(){
   }
   return _coilUse.used;
 }
+/* 材料（コイル）に「使う機械」が付いていれば、それで予定のまとまりとプールを分ける（c.machines）。
+   1つも付いていない間は、今までどおり記録から推し量る */
+function coilAssigned(){ return (store.coils||[]).some(c=> Array.isArray(c.machines) && c.machines.some(id=> store.machines.some(m=> m.id===id))); }
+function machineCoilIds(mid){ return (store.coils||[]).filter(c=> (c.machines||[]).includes(mid)).map(c=> c.id); }
+function planGroups(){
+  const ids = store.machines.map(m=> m.id);
+  if(!coilAssigned()) return [{ key:'', ms:ids, coils:[] }];
+  const map = new Map();
+  ids.forEach(id=>{
+    const cs = machineCoilIds(id).sort(), k = cs.join('|');
+    if(!map.has(k)) map.set(k, { key:k, ms:[], coils:cs });
+    map.get(k).ms.push(id);
+  });
+  return [...map.values()];
+}
+function planGroupOf(mid){ return planGroups().find(g=> g.ms.includes(mid)) || null; }
+function planGroupCoilNames(g){ return g.coils.map(id=> (store.coils.find(c=> c.id===id)||{}).name).filter(Boolean); }
+// その他のプールに出る注文：材料が決まっていない・その材料を使う機械が無い
+function orderIsOther(o){
+  if(!o.coilId) return true;
+  const c = (store.coils||[]).find(x=> x.id===o.coilId);
+  return !c || !(c.machines||[]).some(id=> store.machines.some(m=> m.id===id));
+}
 function orderMachines(o){
   const all = store.machines.map(m=>m.id);
+  if(coilAssigned()){
+    if(orderIsOther(o)) return all;
+    const c = store.coils.find(x=> x.id===o.coilId);
+    const list = all.filter(id=> c.machines.includes(id));
+    return list.length ? list : all;
+  }
   if(!o.coilId) return all;
   const used = coilUseMap();
   const made = new Set(store.records.filter(r=>(r.partNo||'').trim()===o.partNo).map(r=>r.machineId));
@@ -5589,7 +5642,14 @@ function renderPlan(){
   const prevFirst = planFirst;
   planFirst = dayNum(dateKey(new Date(base.getFullYear(), base.getMonth() - planBehind, 1)));
   planN = dayNum(dateKey(new Date(base.getFullYear(), base.getMonth() + planAhead + 1, 0))) - planFirst + 1;
-  $('#planMachChips').innerHTML = ms.map(m=>`<button class="rchip${m.id===planMachine?' sel':''}" onclick="setPlanMachine('${esc(m.id)}')">${esc(m.id)}</button>`).join('');
+  const groups = planGroups(), grp = planGroupOf(planMachine) || groups[0];
+  $('#planGroupChips').hidden = groups.length < 2;
+  $('#planGroupChips').innerHTML = groups.length < 2 ? '' : groups.map(g=>{
+    const nm = planGroupCoilNames(g);
+    return `<button class="${g===grp?'sel':''}" onclick="setPlanMachine('${esc(g.ms[0])}')">${esc(g.ms.join('・'))}<small>${esc(nm.length ? nm.join('・') : '材料未設定')}</small></button>`;
+  }).join('');
+  const gms = grp ? ms.filter(m=> grp.ms.includes(m.id)) : ms;
+  $('#planMachChips').innerHTML = gms.map(m=>`<button class="rchip${m.id===planMachine?' sel':''}" onclick="setPlanMachine('${esc(m.id)}')">${esc(m.id)}</button>`).join('');
   if(!ms.length){
     $('#planGantt').innerHTML = '<div class="rec-empty-note">機械が未登録です。設定タブで登録してください。</div>';
     $('#planPool').innerHTML = ''; $('#planPoolSub').textContent = '';
@@ -5605,7 +5665,7 @@ function renderPlan(){
     head += `<div class="g-d${off?' off':''}${n===todayN?' today':''}${wd===0?' sun':wd===6?' sat':''}${m1?' m1':''}"${off?` title="${esc(off.label)}"`:''}><b>${d.getDate()}</b><span>${WD[wd]}</span></div>`;
   }
   flushM();
-  const rows = ms.map(m=>{
+  const rows = gms.map(m=>{
     const lay = planLayout(m.id), free = planFree(m.id, lay);
     let cells = '';
     for(let i=0; i<planN; i++){
@@ -5648,16 +5708,31 @@ function renderPlanPool(){
   const mId = planMachine;
   const lay = planLayout(mId);
   const pooled = store.orders.filter(isPooled);
-  const items = pooled.filter(o=> orderMachines(o).includes(mId)).map(o=>({ o, fit:orderFit(o, mId, lay) }));
   const rank = x => x.fit.st==='unk' ? 1e9 : x.fit.latest.d + x.fit.latest.f;
-  items.sort((a,b)=> (rank(a)-rank(b)) || (a.o.due<b.o.due ? -1 : a.o.due>b.o.due ? 1 : 0));
-  const coils = planMachineCoils(mId);
-  $('#planPoolSub').textContent = `${mId} で作れる注文 ${items.length}件` + (coils.length ? `（${coils.join('・')}）` : '');
-  const other = pooled.length - items.length;
-  bulkSetShown('pool', planEdit ? items.map(x=> x.o.id) : []);
-  const bar = (planEdit && items.length) ? bulkBarHtml('pool', [{ label:'選んだ注文を削除', fn:'poolDeleteSel' }]) : '';
+  const sortIt = list=> list.sort((a,b)=> (rank(a)-rank(b)) || (a.o.due<b.o.due ? -1 : a.o.due>b.o.due ? 1 : 0));
+  const grouped = coilAssigned();
+  const grp = grouped ? planGroupOf(mId) : null;
+  // 材料ごとに分けている時：このまとまりの材料の注文／それ以外は「その他のプール」
+  const items = sortIt(pooled.filter(o=> grouped ? (!orderIsOther(o) && grp && grp.coils.includes(o.coilId)) : orderMachines(o).includes(mId)).map(o=>({ o, fit:orderFit(o, mId, lay) })));
+  const others = grouped ? sortIt(pooled.filter(orderIsOther).map(o=>({ o, fit:orderFit(o, mId, lay) }))) : [];
+  if(grouped){
+    const nm = grp ? planGroupCoilNames(grp) : [];
+    $('#planPoolSub').textContent = nm.length ? `${nm.join('・')} の注文 ${items.length}件（${grp.ms.join('・')}）` : `${mId} は材料が決まっていません（設定タブの「コイル（材料）の登録」で使う機械を選べます）`;
+  } else {
+    const coils = planMachineCoils(mId);
+    $('#planPoolSub').textContent = `${mId} で作れる注文 ${items.length}件` + (coils.length ? `（${coils.join('・')}）` : '');
+  }
+  const other = pooled.length - items.length - others.length;
+  bulkSetShown('pool', planEdit ? items.concat(others).map(x=> x.o.id) : []);
+  const bar = (planEdit && (items.length || others.length)) ? bulkBarHtml('pool', [{ label:'選んだ注文を削除', fn:'poolDeleteSel' }]) : '';
   el.innerHTML = items.length ? bar + items.map(x=> planCardHtml(x.o, x.fit, mId)).join('')
-    : `<div class="pool-empty">${esc(mId)} で作れる注文はありません。<br>注文が入ったら「＋ 注文を追加」か「📄 加工指図更新」で入れてください。${other>0 ? `<br><small>（他の機械向けの注文 ${other}件）</small>` : ''}</div>`;
+    : (others.length ? bar : '') + `<div class="pool-empty">${esc(grouped && grp && grp.coils.length ? planGroupCoilNames(grp).join('・') + ' の注文' : mId + ' で作れる注文')}はありません。<br>注文が入ったら「＋ 注文を追加」か「📄 加工指図更新」で入れてください。${other>0 ? `<br><small>（他の機械向けの注文 ${other}件）</small>` : ''}</div>`;
+  $('#planOtherWrap').hidden = !grouped;
+  if(grouped){
+    $('#planOtherSub').textContent = `材料が決まっていない注文 ${others.length}件・どの機械にも入れられます（今は ${mId} に入れます）`;
+    $('#planPoolOther').innerHTML = others.length ? others.map(x=> planCardHtml(x.o, x.fit, mId)).join('')
+      : '<div class="pool-empty">材料が決まっていない注文はありません。</div>';
+  }
   bulkRefresh('pool');
   renderKakouInfo();
   renderPlanOverdue();
@@ -6358,14 +6433,14 @@ function startFromOrder(id){
 function planDragStart(e, id, from){
   planDrag = { id, from, key:null, tip:'' };
   try{ e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; }catch(_){}
-  if(from==='bar') $('#planPool').classList.add('drop-ok');
+  if(from==='bar') document.querySelectorAll('#planPool, #planPoolOther').forEach(x=> x.classList.add('drop-ok'));
   const tr = $('#planTrash'); if(tr) tr.hidden = false;   // ドラッグ中だけゴミ箱を出す
 }
 function planDragEnd(){
   planDrag = null;
   document.querySelectorAll('.g-track.over').forEach(x=>x.classList.remove('over'));
   document.querySelectorAll('.g-mark').forEach(x=>x.remove());
-  $('#planPool').classList.remove('drop-ok','over');
+  document.querySelectorAll('#planPool, #planPoolOther').forEach(x=> x.classList.remove('drop-ok','over'));
   const tr = $('#planTrash'); if(tr){ tr.hidden = true; tr.classList.remove('over'); }
   planHideTip();
   if(planDirty){ planDirty = false; renderPlan(); }
@@ -6388,7 +6463,7 @@ function planPreview(id, machineId, n){
   else h += me.late ? `<div class="bad">✕ 納期 ${numMDW(dayNum(o.due))} に遅れます</div>` : `<div class="ok">✓ 納期 ${numMDW(dayNum(o.due))} に間に合います</div>`;
   const pushed = lay.filter(x=> x.late && x.o.id!==id && !before.has(x.o.id)).length;
   if(pushed) h += `<div class="bad">⚠ 後ろの予定 ${pushed}件 が納期に遅れます</div>`;
-  if(!orderMachines(o).includes(machineId)) h += '<div class="warn">この機械では使ったことのないコイルです</div>';
+  if(!orderMachines(o).includes(machineId)) h += coilAssigned() ? '<div class="warn">この機械の材料ではありません</div>' : '<div class="warn">この機械では使ったことのないコイルです</div>';
   return h;
 }
 function planOver(e, machineId){
@@ -6464,12 +6539,12 @@ function planPoolOver(e){
   if(!planDrag || planDrag.from!=='bar') return;
   e.preventDefault();
   try{ e.dataTransfer.dropEffect = 'move'; }catch(_){}
-  $('#planPool').classList.add('over');
+  e.currentTarget.classList.add('over');
   planHideTip();
 }
 function planPoolLeave(e){
   if(e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return;
-  $('#planPool').classList.remove('over');
+  e.currentTarget.classList.remove('over');
 }
 function planPoolDrop(e){
   if(!planDrag || planDrag.from!=='bar') return;
@@ -6517,8 +6592,10 @@ function openOrderSheet(id){
   osNameTouched = !!(o && o.partName);
   $('#osQty').value = o && !o.needsInput ? o.qty : '';   // 取り込んだ作業は仮の値を見せずに空欄で
   $('#osDue').value = o && !o.needsInput ? o.due : '';
-  $('#osCoil').innerHTML = '<option value="">（コイル未選択＝全部の機械に出す）</option>' + store.coils.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
-  $('#osCoil').value = o ? (o.coilId||'') : '';
+  $('#osCoil').innerHTML = (coilAssigned() ? '<option value="">（材料未選択＝その他のプールに出す）</option>' : '<option value="">（コイル未選択＝全部の機械に出す）</option>') + store.coils.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  // 新しい注文は、いま見ている機械の材料を先に選んでおく（材料が1つの時）
+  const gNow = (!o && coilAssigned() && planMachine) ? planGroupOf(planMachine) : null;
+  $('#osCoil').value = o ? (o.coilId||'') : (gNow && gNow.coils.length===1 ? gNow.coils[0] : '');
   $('#osSpm').value = o && o.spm ? o.spm : '';
   $('#osSpp').value = o && o.spp ? o.spp : '';
   const sched = !!(o && !isPooled(o));
@@ -6693,7 +6770,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.84';
+const APP_VERSION = '2026-06-28.85';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
