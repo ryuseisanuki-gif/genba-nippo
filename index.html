@@ -4705,7 +4705,7 @@ function monthlyMachineData(mid, ym){
     const day = new Date(d), dk = dateKey(day);
     const hasCount = store.records.some(r=> r.machineId===mid && (r.dailyCounts||[]).some(x=> x.date===dk));
     if(!machineDayHasRecord(day, mid) && !hasCount) continue;
-    if(offDay(day) || isShutdown(day, mid)) continue;   // 土日祝・休止の日は除く（日別集計と同じ。持ち越しの作業がまたいでいても動いていない）
+    if(offDay(day) || shutdownForAgg(day, mid)) continue;   // 土日祝・休止の日は除く（日別集計と同じ：休止期間でもその日に作業を始めた・個数が入っていれば数える。持ち越しの作業がまたいでいるだけの日は除く）
     const sm = summaryFor(mid, day);
     days.push([`${day.getMonth()+1}/${day.getDate()}（${WD_JA[day.getDay()]}）`, sm.rate == null ? null : sm.rate/100, sm.qty||0, xlMin(sm.notRun), xlReasons(sm.reasons)]);
     if(sm.rate != null){ tot.days++; tot.win += sm.workWindow; }
@@ -6804,7 +6804,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.87';
+const APP_VERSION = '2026-06-28.88';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
