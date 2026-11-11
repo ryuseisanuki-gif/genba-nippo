@@ -916,6 +916,7 @@
   .stk button{margin-left:auto;padding:7px 12px;border-radius:9px;border:1.5px solid var(--line);background:#fff;font-weight:800;font-size:12.5px;cursor:pointer;}
   .os-stock-info{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;font-size:13px;font-weight:700;color:var(--ink2);margin:-2px 0 6px;}
   .os-stock-info b{font-family:var(--mono);color:#7a5600;font-size:15px;}
+  .os-auto-qty{padding:6px 10px;border-radius:8px;border:1.5px solid #d9a400;background:#fff3bf;color:#7a5600;font-weight:800;font-size:12.5px;cursor:pointer;}
   .os-stock-info input{width:96px;padding:6px 8px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--mono);font-weight:800;font-size:14px;}
   .os-use{background:#fffbe6;border:1.5px solid #ecd27a;border-radius:10px;padding:8px 10px;margin:2px 0 6px;}
   .os-use .h{font-size:12.5px;font-weight:800;color:#7a5600;margin-bottom:6px;}
@@ -6548,8 +6549,36 @@ function planToastPlaced(o){
   else toast(`${o.machineId}：${numMDW(me.s.d)}〜${numMDW(me.last)} に入れました`, 'success');
 }
 // 「○○の予定に入れる」：その機械の空いている所（収まる隙間、無ければ最後の予定の後ろ）に入れる
-function planPut(id){
+// プールから予定に入れる時：同じ材料の在庫があれば「在庫を使いますか？」（加工指図から入った受注など、注文の画面を開いていない物）
+// 戻り値 false＝予定に入れない（やめた・全部在庫でまかなって完了にした）
+function stockCandsFor(o){
+  return stockNameList().filter(x=> (x.o.coilId || '') === (o.coilId || '') && stockCount(x.name).now > 0);
+}
+async function askUseStockOnPlace(o){
+  if(!o || isStock(o) || o.useStock || o.noStock || o.startedAt || o.done) return true;
+  const p = stockCandsFor(o)[0];
+  if(!p) return true;
+  const av = stockCount(p.name).now, use = Math.min(av, o.qty || 0);
+  if(!(use > 0)) return true;
+  const all = use >= (o.qty || 0);
+  const c = await choiceDialog('在庫を使いますか？',
+    `「${o.partNo}」（${(o.qty||0).toLocaleString()}個）と同じ材料の在庫「${p.name}」が ${av.toLocaleString()}個 あります。\n` +
+    (all ? '全部在庫でまかなえます。使うと作らずに完了にします（予定には入れません）。' : `使うと在庫から ${use.toLocaleString()}個 使って、残りの ${((o.qty||0) - use).toLocaleString()}個 だけ作ります。`),
+    '在庫を使う（全部）', '使わない', 'やめる');
+  if(c === 'cancel') return false;
+  if(c === 'alt'){ o.noStock = true; return true; }
+  o.useStock = { name:p.name, qty:use }; delete o.noStock;
+  if(all){
+    o.done = true; o.doneAt = nowDate().toISOString(); o.doneQty = 0;
+    save(); renderPlan();
+    toast(`全部在庫から使って完了にしました（${p.name} あと ${stockCount(p.name).now.toLocaleString()}個）`, 'success');
+    return false;
+  }
+  return true;
+}
+async function planPut(id){
   const o = store.orders.find(x=>x.id===id); if(!o || !planMachine) return;
+  if(!(await askUseStockOnPlace(o))) return;
   planWorkMemo = {};
   const free = planSlot(o, planMachine);
   o.machineId = planMachine; o.start = numKey(free.d); o.startFrac = free.f; o.seq = nowMs();
@@ -6771,13 +6800,14 @@ function planLeave(e){
   if(planDrag) planDrag.key = null;
   planHideTip();
 }
-function planDropTrack(e, machineId){
+async function planDropTrack(e, machineId){
   if(!planDrag) return;
   e.preventDefault();
   const n = planDayAt(e, e.currentTarget);
   const o = store.orders.find(x=>x.id===planDrag.id);
   planDragEnd();
   if(!o) return;
+  if(!isScheduled(o) && !(await askUseStockOnPlace(o))) return;   // プールから入れる時だけ聞く
   o.machineId = machineId; o.start = numKey(n); o.startFrac = 0; o.seq = nowMs();
   save(); renderPlan(); planToastPlaced(o);
 }
@@ -7034,6 +7064,20 @@ function renderPlanStock(){
     </div>`;
   }).join('');
 }
+// 作る数＝最大在庫 −今の在庫 −ほかに予定・作業中の同じ在庫（手で直すこともできる）
+function osAutoStockQty(){
+  const name = $('#osStockName').value.trim();
+  const max = parseInt(($('#osStockMax')||{}).value) || 0;
+  if(!name){ toast('在庫の名前を入れてください','error'); return; }
+  if(!(max > 0)){ toast('先に最大在庫を入れてください','error'); try{ $('#osStockMax').focus(); }catch(e){} return; }
+  const c = stockCount(name);
+  let pend = 0;
+  (store.orders||[]).forEach(o=>{ if(isStock(o) && !o.done && o.id !== osId && stockNameOf(o) === name) pend += (o.qty || 0); });
+  const q = max - c.now - pend;
+  if(q <= 0){ toast(`最大在庫まであります（今 ${c.now.toLocaleString()}個${pend ? '＋予定・作業中 ' + pend.toLocaleString() + '個' : ''}）。作る必要はありません`,'error'); return; }
+  $('#osQty').value = q; osRefresh();
+  toast(`作る数 ${q.toLocaleString()}個 ＝ 最大 ${max.toLocaleString()} − 今 ${c.now.toLocaleString()}${pend ? ' − 予定・作業中 ' + pend.toLocaleString() : ''}`, 'success');
+}
 // 注文の画面（在庫）：その名前の今の在庫と最大在庫
 function osRenderStockInfo(){
   const el = $('#osStockInfo'); if(!el) return;
@@ -7041,7 +7085,8 @@ function osRenderStockInfo(){
   if(!osStock || !name){ el.innerHTML = ''; return; }
   const c = stockCount(name);
   el.innerHTML = `<span>今の在庫 <b>${c.now.toLocaleString()}</b> 個</span>` +
-    `<label>最大在庫 <input type="number" id="osStockMax" inputmode="numeric" min="0" value="${c.max || ''}" placeholder="なし" oninput="osRefresh()"> 個</label>`;
+    `<label>最大在庫 <input type="number" id="osStockMax" inputmode="numeric" min="0" value="${c.max || ''}" placeholder="なし" oninput="osRefresh()"> 個</label>` +
+    `<button type="button" class="os-auto-qty" onclick="osAutoStockQty()">作る数を自動（最大まで）</button>`;
 }
 // 受注の画面の「在庫から使う」
 let osUseTouched = false;   // 手で選んだ・個数を直した（もう使う分が決まっている注文も自動では変えない）
@@ -7206,8 +7251,10 @@ function osRefresh(){
     const c = orderCalc(tmp, mId);
     h += `<br>目標時間 <b>約${planFmtHours(c.min)}</b>　見込み <b>${planFmtDays(c.need)}日</b>（止まらなければ ${planFmtDays(c.fast)}日）`;
     if(osStock){
-      const sc = stockCount(part), mx = parseInt(($('#osStockMax')||{}).value) || null, after = sc.now + tmp.qty;
-      h += `<br>作り終えると在庫 <b>${after.toLocaleString()}個</b>` + (mx && after > mx ? `　<span class="bad">最大在庫（${mx.toLocaleString()}個）を ${(after - mx).toLocaleString()}個 超えます</span>` : '');
+      let pend = 0;   // ほかに予定・作業中の同じ在庫
+      (store.orders||[]).forEach(o=>{ if(isStock(o) && !o.done && o.id !== osId && stockNameOf(o) === part) pend += (o.qty || 0); });
+      const sc = stockCount(part), mx = parseInt(($('#osStockMax')||{}).value) || null, after = sc.now + pend + tmp.qty;
+      h += `<br>作り終えると在庫 <b>${after.toLocaleString()}個</b>` + (pend ? `（予定・作業中の ${pend.toLocaleString()}個 を含む）` : '') + (mx && after > mx ? `　<span class="bad">最大在庫（${mx.toLocaleString()}個）を ${(after - mx).toLocaleString()}個 超えます</span>` : '');
     }
     if(tmp.due || osStock){
       const st = $('#osStart').value;
@@ -7348,7 +7395,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.100';
+const APP_VERSION = '2026-06-28.101';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
