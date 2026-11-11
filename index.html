@@ -902,7 +902,7 @@
   .os-hist-m button{padding:5px 12px;border-radius:999px;border:1.5px solid var(--line);background:var(--surface);font-weight:800;font-size:12.5px;color:var(--ink2);cursor:pointer;font-family:var(--mono);}
   .os-hist-m button.on{background:var(--ink);border-color:var(--ink);color:#fff;}
   /* 在庫は「過去の品番・コイル・作る数」だけ（読み取り・品名・回転数は隠す） */
-  #orderSheet.stock-mode .os-scan .btn-scan,#orderSheet.stock-mode .os-scan .btn-scan-photo,#orderSheet.stock-mode .os-scan .rpm-row,#orderSheet.stock-mode #osNameLab{display:none;}
+  #orderSheet.stock-mode .os-scan .btn-scan,#orderSheet.stock-mode .os-scan .btn-scan-photo,#orderSheet.stock-mode .os-scan .rpm-row,#orderSheet.stock-mode #osNameLab,#orderSheet.stock-mode #osPartLab{display:none;}
   .os-kind-note{font-size:12px;color:var(--ink3);font-weight:600;margin:0 0 6px;line-height:1.5;}
   .oc-alt{font-size:12px;font-weight:700;color:var(--blue);}
   .oc-btns{display:flex;gap:8px;margin-top:2px;}
@@ -1337,7 +1337,7 @@
     </div>
     <div class="os-kind-note" id="osKindNote"></div>
     <div class="of">
-      <label>品番<input type="text" id="osPart" class="scanned-input" autocomplete="off" inputmode="text" placeholder="バーコード読取／品番を手入力" oninput="osRefresh()"></label>
+      <label id="osPartLab">品番<input type="text" id="osPart" class="scanned-input" autocomplete="off" inputmode="text" placeholder="バーコード読取／品番を手入力" oninput="osRefresh()"></label>
       <label id="osNameLab">品名（任意）<input type="text" id="osName" class="of-in" autocomplete="off" placeholder="空でもOK（例 SUS430棚柱）" oninput="osNameInput()"></label>
       <!-- 日報入力の「バーコードを読み取る」と同じ入力（デモ中のパソコンはここで入れる） -->
       <div class="os-scan">
@@ -1347,7 +1347,7 @@
           <input type="file" accept="image/*" capture="environment" id="osPhoto" onchange="osDecodePhoto(event)" style="display:none">
         </label>
         <div class="coil-row">
-          <span class="coil-lab">📄 過去の品番</span>
+          <span class="coil-lab" id="osHistLab">📄 過去の品番</span>
           <select id="osHistory" class="coil-select" onchange="osPickHistory()"></select>
         </div>
         <div class="os-hist-m" id="osHistM"></div>
@@ -3632,7 +3632,7 @@ async function endLeaveQtyById(id){
   renderScanned();
   refreshActiveViews();
   toast('終了しました。個数は「記録」タブであとから入力できます','success');
-  askStockShutdown(r);
+  afterEndAsk(r);
 }
 function endLeaveQtyFromCarry(){ endLeaveQtyById(carryRecordId); }
 async function confirmEnd(skipQty){
@@ -3683,19 +3683,65 @@ async function confirmEnd(skipQty){
     toast(base + ' — 次の予定を表示しています','success');
     try{ $('#statusPanel').scrollIntoView({ behavior:'smooth', block:'center' }); }catch(e){}
   } else toast(base,'success');
-  askStockShutdown(r);
+  afterEndAsk(r);
 }
-// 在庫の作業を終えたら「休業にしますか？」：明日から、次の予定の前日まで（次の予定が無ければ終わりの日を選ぶ）
+// 作業を終えた時の案内（終了ボタンのあと）
+//  ・在庫の作業を終えた → 「休業にしますか？」：明日から次の予定の前日まで（次の予定が無ければ終わりの日を選ぶ）
+//  ・受注の作業を終えて、その機械の予定がもう無い → 「次は在庫分にしますか？ 休業にしますか？」
 function stockOrderOf(r){
   return (store.orders||[]).find(o=> isStock(o) && (o.recId===r.id || (r.orderId && o.id===r.orderId))) || null;
+}
+function linkedOrderOf(r){
+  return (store.orders||[]).find(o=> o.recId===r.id || (r.orderId && o.id===r.orderId)) || null;
+}
+const fmtKey = k => String(k||'').replace(/-/g,'/');
+function tomorrowDate(){ const t = nowDate(); t.setHours(0,0,0,0); t.setDate(t.getDate()+1); return t; }
+// 確認の画面に入力欄を1つ足して聞く。{ v:'ok'|'alt'|'cancel', val }
+async function askWithInput(title, msg, okLabel, cancelLabel, inputHtml, altLabel){
+  const p = altLabel ? choiceDialog(title, msg, okLabel, altLabel, cancelLabel) : confirmDialog(title, msg, okLabel).then(v=> v===true ? 'ok' : 'cancel');
+  $('#cfCancel').textContent = cancelLabel;
+  let box = null;
+  if(inputHtml){
+    box = document.createElement('div');
+    box.id = 'cfExtra'; box.className = 'sd-dates'; box.style.margin = '4px 0 12px';
+    box.innerHTML = inputHtml;
+    $('#cfMsg').after(box);
+    setTimeout(()=>{ const i = box.querySelector('input'); if(i) try{ i.focus(); }catch(e){} }, 250);
+  }
+  const v = await p;
+  const inp = box && box.querySelector('input');
+  const val = inp ? inp.value : '';
+  if(box) box.remove();
+  return { v, val };
+}
+function addMachineShutdown(mid, from, to, label){
+  store.shutdowns = store.shutdowns || [];
+  store.shutdowns.push({ id:'s'+nowMs().toString(36)+Math.random().toString(36).slice(2,5), from, to, label, machineId:mid });
+  save(); renderShutdownSettings(); processAutoDaily(); refreshActiveViews();
+  toast(`${mid} を ${fmtKey(from)} 〜 ${fmtKey(to)} 休業にしました（設定タブの「休止期間」で直せます）`,'success');
+}
+// 明日からの休業の終わりの日を選んでもらう（キャンセルなら null）
+async function pickShutdownEnd(title, msg){
+  const from = dateKey(tomorrowDate());
+  for(;;){
+    const a = await askWithInput(title, msg + `\n${fmtKey(from)} から休業にします。終わりの日を選んでください。`, '休業にする', '休業にしない',
+      `<span>${fmtKey(from)} 〜</span><input type="date" id="cfDate" min="${from}">`);
+    if(a.v !== 'ok') return null;
+    if(a.val && a.val >= from) return a.val;
+    toast('終わりの日を選んでください（明日以降）','error');
+  }
+}
+function afterEndAsk(r){
+  if(!r) return;
+  if(stockOrderOf(r)) askStockShutdown(r);
+  else askNextAfterOrder(r);
 }
 async function askStockShutdown(r){
   try{
     const so = r && stockOrderOf(r);
     if(!so) return;
     const mid = r.machineId;
-    const t = nowDate(); t.setHours(0,0,0,0); t.setDate(t.getDate()+1);
-    const from = dateKey(t);
+    const t = tomorrowDate(), from = dateKey(t);
     if(isShutdown(t, mid)) return;   // 明日がもう休止なら聞かない
     let nx = null;
     try{ nx = nextOrderFor(mid); }catch(e){}
@@ -3707,38 +3753,58 @@ async function askStockShutdown(r){
       let work = false;
       for(let d = new Date(t); dateKey(d) <= to; d.setDate(d.getDate()+1)){ if(!offDay(d)){ work = true; break; } }
       if(!work) return;
-    }
-    const fmt = k => k.replace(/-/g,'/');
-    let ok;
-    if(nx){
-      const p = confirmDialog('休業にしますか？',
-        `在庫の作業「${so.partNo}」が終わりました。\n${mid} を ${fmt(from)} 〜 ${fmt(to)} 休業にしますか？\n（次の予定「${nx.o.partNo}」が ${numMDW(nx.s.d)} から始まるので、その前日まで）`,
-        '休業にする');
-      $('#cfCancel').textContent = '休業にしない';
-      ok = await p;
-      if(!ok) return;
+      const a = await askWithInput('休業にしますか？',
+        `在庫の作業「${stockName(so)}」が終わりました。\n${mid} を ${fmtKey(from)} 〜 ${fmtKey(to)} 休業にしますか？\n（次の予定「${nx.o.partNo}」が ${numMDW(nx.s.d)} から始まるので、その前日まで）`,
+        '休業にする', '休業にしない');
+      if(a.v !== 'ok') return;
     } else {
-      for(;;){
-        const p = confirmDialog('休業にしますか？',
-          `在庫の作業「${so.partNo}」が終わりました。\n${mid} にはこのあとの予定がありません。\n${fmt(from)} から休業にする場合は、終わりの日を選んでください。`, '休業にする');
-        $('#cfCancel').textContent = '休業にしない';
-        const box = document.createElement('div');
-        box.id = 'cfExtra'; box.className = 'sd-dates'; box.style.margin = '4px 0 12px';
-        box.innerHTML = `<span>${fmt(from)} 〜</span><input type="date" id="cfDate" min="${from}">`;
-        $('#cfMsg').after(box);
-        ok = await p;
-        to = ($('#cfDate')||{}).value || '';
-        box.remove();
-        if(!ok) return;
-        if(to && to >= from) break;
-        toast('終わりの日を選んでください（明日以降）','error');
-      }
+      to = await pickShutdownEnd('休業にしますか？', `在庫の作業「${stockName(so)}」が終わりました。\n${mid} にはこのあとの予定がありません。`);
+      if(!to) return;
     }
-    store.shutdowns = store.shutdowns || [];
-    store.shutdowns.push({ id:'s'+nowMs().toString(36)+Math.random().toString(36).slice(2,5), from, to, label:'在庫の作業のあと', machineId:mid });
-    save(); renderShutdownSettings(); processAutoDaily(); refreshActiveViews();
-    toast(`${mid} を ${fmt(from)} 〜 ${fmt(to)} 休業にしました（設定タブの「休止期間」で直せます）`,'success');
+    addMachineShutdown(mid, from, to, '在庫の作業のあと');
   }catch(e){ console.warn('askStockShutdown', e); }
+}
+// 受注の作業を終えて、その機械にもう予定が無い時：在庫分を作るか、休業にするか
+async function askNextAfterOrder(r){
+  try{
+    const ord = linkedOrderOf(r);
+    if(!ord || isStock(ord)) return;   // 予定から始めた受注の作業だけ
+    const mid = r.machineId;
+    let nx = null;
+    try{ nx = nextOrderFor(mid); }catch(e){}
+    if(nx) return;                     // 次の予定があれば、待機中の画面に出ている
+    if(isShutdown(tomorrowDate(), mid)) return;
+    const c = await choiceDialog(`${mid} の予定はこれで終わりです`,
+      `受注「${ord.partNo}」が終わりました。\n次は在庫分を作りますか？　それとも休業にしますか？`,
+      '🟨 在庫分を作る', '休業にする', 'どちらもしない');
+    if(c === 'cancel') return;
+    if(c === 'alt'){
+      const to = await pickShutdownEnd('休業にする', `${mid} にはこのあとの予定がありません。`);
+      if(to) addMachineShutdown(mid, dateKey(tomorrowDate()), to, '受注のあと');
+      return;
+    }
+    // 在庫分：同じ品番・コイルで、作る数だけ聞いて予定に入れる
+    const coilId = ord.coilId || r.coilId || null;
+    const coil = (store.coils||[]).find(x=> x.id===coilId);
+    let qty = 0;
+    for(;;){
+      const a = await askWithInput('在庫分を作る',
+        `「${ord.partNo}」の在庫分を何個作りますか？${coil ? '\nコイル：' + coil.name : ''}\n入れると ${mid} の次の予定（黄色）になり、「この予定で開始」で始められます。`,
+        '予定に入れる', 'やめる', `<input type="number" id="cfQty" inputmode="numeric" min="1" placeholder="作る数（個）" style="flex:1">`);
+      if(a.v !== 'ok') return;
+      qty = parseInt(a.val);
+      if(qty > 0) break;
+      toast('作る数を入れてください','error');
+    }
+    const now = planTodayPos(mid);
+    const o = { id:'o'+nowMs().toString(36)+Math.random().toString(36).slice(2,6), partNo:ord.partNo, partName: ord.partName || partNameOf(ord.partNo) || '',
+      qty, due:'', stock:true, coilId, spm: ord.spm || null, spp: ord.spp || null,
+      machineId:mid, start:numKey(now.d), startFrac:now.f, seq:nowMs(), done:false, createdAt:nowDate().toISOString() };
+    store.orders.push(o);
+    planWorkMemo = {};
+    save(); refreshActiveViews();
+    toast(`在庫分（${ord.partNo}・${qty.toLocaleString()}個）を ${mid} の次の予定に入れました`,'success');
+  }catch(e){ console.warn('askNextAfterOrder', e); }
 }
 
 /* ===== SCANNER ===== */
@@ -5723,6 +5789,7 @@ const PLAN_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function validOrder(o){ return !!(o && o.id && typeof o.partNo==='string' && o.partNo && o.qty > 0 && (PLAN_DATE_RE.test(o.due||'') || (o.stock===true && !o.due))); }
 // 在庫の注文（受注ではない。納期なし・黄色のバー）
 function isStock(o){ return !!(o && o.stock===true); }
+function stockName(o){ const n = o.partName || partNameOf(o.partNo); return o.partNo + (n ? '（' + n + '）' : ''); }
 // 「納期 11/12(木)」／在庫は「在庫」
 function dueLabel(o, short){ return isStock(o) ? '在庫' : '納期 ' + (short ? numMD(dayNum(o.due)) : numMDW(dayNum(o.due))); }
 function isScheduled(o){ return !!(o.start && PLAN_DATE_RE.test(o.start) && store.machines.some(m=>m.id===o.machineId)); }
@@ -6756,12 +6823,13 @@ let osStock = false, osStockWas = false;
 function osSetKind(stock, quiet){
   osStock = !!stock;
   $('#orderSheet').classList.toggle('stock-mode', osStock);
+  $('#osHistLab').textContent = osStock ? '🟨 何の在庫分' : '📄 過去の品番';
   document.querySelectorAll('#osKind button').forEach(b=> b.classList.toggle('on', b.classList.contains(osStock ? 'k-stock' : 'k-order')));
   $('#osDueLab').hidden = osStock;
   $('#osQtyLab').textContent = osStock ? '在庫で作る数（個）' : '数量（個）';
   $('#osKindNote').innerHTML = osStock
-    ? '在庫：「過去の品番」から選んで、コイルと作る数を入れるだけです（納期なし）。受注が入ったら、このバーを押して「🟩 受注」に変え、納期を入れると緑になります。'
-    : (osStockWas ? '<b>在庫 → 受注に変えます。</b>納期を入れて保存すると緑のバーになります（作業中ならそのまま続きます）。' : '');
+    ? '在庫：「何の在庫分」を選んで、コイルと作る数を入れるだけです（品番・納期は入れません）。受注が入ったら、このバーを押して「🟩 受注」に切り替え、納期を入れると緑になります。'
+    : (osStockWas ? '<b>在庫 → 受注に切り替えます。</b>納期を入れて保存すると緑のバーになります（作業中ならそのまま続きます）。受注の品番が違う時は品番も直せます。' : '');
   if(!quiet){ osRefresh(); if(!osStock && !$('#osDue').value) setTimeout(()=>{ try{ $('#osDue').focus(); }catch(e){} }, 50); }
 }
 function osCoilChanged(){ osCoilTouched = true; osRefresh(); }
@@ -6826,7 +6894,7 @@ function osRefresh(){
 }
 function saveOrder(){
   const part = $('#osPart').value.trim(), qty = parseInt($('#osQty').value), due = $('#osDue').value;
-  if(!part){ toast('品番を入れてください','error'); return; }
+  if(!part){ toast(osStock ? '何の在庫分かを選んでください' : '品番を入れてください','error'); return; }
   if(!(qty > 0)){ toast('数量を入れてください','error'); return; }
   if(!osStock && !due){ toast(osStockWas ? '受注に変えるには納期を入れてください' : '納期を入れてください','error'); return; }
   const isEdit = !!osId;
@@ -6926,7 +6994,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.90';
+const APP_VERSION = '2026-06-28.91';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
