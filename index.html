@@ -7001,10 +7001,14 @@ async function fixStockCount(name){
 }
 function renderPlanStock(){
   const wrap = $('#planStockWrap'); if(!wrap) return;
-  const list = stockNameList().filter(x=> isStock(x.o) || stockCount(x.name).made || stockItem(x.name).max || stockItem(x.name).adj);
+  // 材料ごとに分けている時は、いま見ている機械のまとまりの材料（コイル）の在庫だけ出す（材料の決まっていない在庫はどこでも出す）
+  const grp = coilAssigned() ? planGroupOf(planMachine) : null;
+  const list = stockNameList().filter(x=> (isStock(x.o) || stockCount(x.name).made || stockItem(x.name).max || stockItem(x.name).adj) &&
+    (!grp || !x.o.coilId || grp.coils.includes(x.o.coilId)));
   wrap.hidden = !list.length;
   if(!list.length) return;
-  $('#planStockSub').textContent = `${list.length}件・在庫のまま作り終えた個数から、受注で使った数を引いたもの（途中で受注に切り替えた分は入りません）`;
+  const gn = grp ? planGroupCoilNames(grp) : [];
+  $('#planStockSub').textContent = `${gn.length ? gn.join('・') + ' の在庫 ' : ''}${list.length}件・在庫のまま作り終えた個数から、受注で使った数を引いたもの（途中で受注に切り替えた分は入りません）`;
   $('#planStock').innerHTML = list.map(x=>{
     const c = stockCount(x.name), nm = esc(x.name);
     return `<div class="stk">
@@ -7300,7 +7304,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.97';
+const APP_VERSION = '2026-06-28.98';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
