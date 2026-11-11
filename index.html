@@ -898,6 +898,11 @@
   .os-kind button{flex:1;padding:10px 6px;border-radius:10px;border:2px solid var(--line);background:var(--surface);font-weight:800;font-size:14px;color:var(--ink2);cursor:pointer;}
   .os-kind button.on.k-order{border-color:var(--run);background:var(--run-bg);color:var(--run-d);}
   .os-kind button.on.k-stock{border-color:#d9a400;background:#fff3bf;color:#7a5600;}
+  .os-hist-m{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 8px;}
+  .os-hist-m button{padding:5px 12px;border-radius:999px;border:1.5px solid var(--line);background:var(--surface);font-weight:800;font-size:12.5px;color:var(--ink2);cursor:pointer;font-family:var(--mono);}
+  .os-hist-m button.on{background:var(--ink);border-color:var(--ink);color:#fff;}
+  /* 在庫は「過去の品番・コイル・作る数」だけ（読み取り・品名・回転数は隠す） */
+  #orderSheet.stock-mode .os-scan .btn-scan,#orderSheet.stock-mode .os-scan .btn-scan-photo,#orderSheet.stock-mode .os-scan .rpm-row,#orderSheet.stock-mode #osNameLab{display:none;}
   .os-kind-note{font-size:12px;color:var(--ink3);font-weight:600;margin:0 0 6px;line-height:1.5;}
   .oc-alt{font-size:12px;font-weight:700;color:var(--blue);}
   .oc-btns{display:flex;gap:8px;margin-top:2px;}
@@ -1333,7 +1338,7 @@
     <div class="os-kind-note" id="osKindNote"></div>
     <div class="of">
       <label>品番<input type="text" id="osPart" class="scanned-input" autocomplete="off" inputmode="text" placeholder="バーコード読取／品番を手入力" oninput="osRefresh()"></label>
-      <label>品名（任意）<input type="text" id="osName" class="of-in" autocomplete="off" placeholder="空でもOK（例 SUS430棚柱）" oninput="osNameInput()"></label>
+      <label id="osNameLab">品名（任意）<input type="text" id="osName" class="of-in" autocomplete="off" placeholder="空でもOK（例 SUS430棚柱）" oninput="osNameInput()"></label>
       <!-- 日報入力の「バーコードを読み取る」と同じ入力（デモ中のパソコンはここで入れる） -->
       <div class="os-scan">
         <button type="button" class="btn-scan" onclick="osOpenScanner()"><span class="cam">📷</span>バーコードを読み取る</button>
@@ -1345,6 +1350,7 @@
           <span class="coil-lab">📄 過去の品番</span>
           <select id="osHistory" class="coil-select" onchange="osPickHistory()"></select>
         </div>
+        <div class="os-hist-m" id="osHistM"></div>
         <div class="coil-row">
           <span class="coil-lab">🧵 コイル</span>
           <select id="osCoil" class="coil-select" onchange="osCoilChanged()"></select>
@@ -6688,21 +6694,9 @@ function openOrderSheet(id){
   $('#osTitle').innerHTML = esc(!o ? '注文を追加' : o.needsInput ? '作業中の注文：残りの数量と納期を入れてください' : isStock(o) ? '在庫の編集' : '注文の編集') + demoChip();
   osStockWas = isStock(o);
   osSetKind(isStock(o), true);
-  // 過去の品番（全部の機械・新しい順）。選ぶとコイル・回転数も呼び出す
-  const seen = new Map();
-  store.records.forEach(r=>{
-    const p = (r.partNo||'').trim(); if(!p) return;
-    const t = new Date(r.startTime).getTime(), cur = seen.get(p);
-    if(!cur || cur.t < t) seen.set(p, { t, m:r.machineId });
-  });
-  store.orders.forEach(x=>{ if(x.partNo && !seen.has(x.partNo)) seen.set(x.partNo, { t:0, m:'' }); });
-  [...seen.keys()].forEach(p=>{ if(partHidden(p)) seen.delete(p); });   // 削除した品番は出さない
-  $('#osHistory').innerHTML = '<option value="">（過去の品番から選ぶ）</option>' +
-    [...seen.entries()].sort((a,b)=> b[1].t - a[1].t).map(([p,x])=>{
-      const n = partNameOf(p);
-      return `<option value="${esc(p)}">${esc(p)}${n?'　'+esc(n):''}${x.t && x.m ? '　' + esc(x.m) : ''}</option>`;
-    }).join('');
-  $('#osHistory').value = o && seen.has(o.partNo) ? o.partNo : '';
+  // 過去の品番（作業の記録＋注文・在庫。新しい順）。機械で絞れる。選ぶとコイル・回転数も呼び出す
+  osHistM = (o && o.machineId) || planMachine || '';
+  osRenderHistory(o ? o.partNo : '');
   $('#osPart').value = o ? o.partNo : '';
   $('#osName').value = o ? (o.partName || partNameOf(o.partNo)) : '';
   osNameTouched = !!(o && o.partName);
@@ -6726,15 +6720,47 @@ function openOrderSheet(id){
   osRefresh();
 }
 function closeOrderSheet(){ $('#orderSheet').classList.remove('active'); osId = null; }
+let osHistM = '';
+function osHistoryMap(){
+  const seen = new Map();   // 品番 -> { t:最後に使った時刻, ms:作った・予定した機械, stock:一番新しいのが在庫か }
+  const add = (p, t, m, stock)=>{
+    p = (p||'').trim(); if(!p) return;
+    let x = seen.get(p);
+    if(!x){ x = { t:-1, ms:new Set(), stock:false }; seen.set(p, x); }
+    if(m) x.ms.add(m);
+    if(t >= x.t){ x.t = t; x.stock = !!stock; }
+  };
+  store.records.forEach(r=> add(r.partNo, new Date(r.startTime).getTime() || 0, r.machineId, false));
+  (store.orders||[]).forEach(o=> add(o.partNo, new Date(o.startedAt || o.createdAt || 0).getTime() || 0, o.machineId, isStock(o)));   // 在庫・終わった注文も残す
+  [...seen.keys()].forEach(p=>{ if(partHidden(p)) seen.delete(p); });   // 削除した品番は出さない
+  return seen;
+}
+function osRenderHistory(keep){
+  const seen = osHistoryMap();
+  const ms = store.machines.map(m=> m.id);
+  if(osHistM && !ms.includes(osHistM)) osHistM = '';
+  const cnt = id=> [...seen.values()].filter(x=> !id || x.ms.has(id)).length;
+  $('#osHistM').innerHTML = [''].concat(ms).map(id=>
+    `<button type="button" class="${osHistM===id?'on':''}" onclick="osSetHistM('${esc(id)}')">${id ? esc(id) : '全部'} <small>${cnt(id)}</small></button>`).join('');
+  const list = [...seen.entries()].filter(([, x])=> !osHistM || x.ms.has(osHistM)).sort((a,b)=> b[1].t - a[1].t);
+  $('#osHistory').innerHTML = `<option value="">${list.length ? '（過去の品番から選ぶ' + (osHistM ? '：' + esc(osHistM) : '') + ' ' + list.length + '件）' : (osHistM ? esc(osHistM) + ' の過去の品番はまだありません' : '過去の品番はまだありません')}</option>` +
+    list.map(([p, x])=>{
+      const n = partNameOf(p);
+      return `<option value="${esc(p)}">${esc(p)}${n?'　'+esc(n):''}${x.ms.size ? '　' + esc([...x.ms].join('・')) : ''}${x.stock ? '　（在庫）' : ''}</option>`;
+    }).join('');
+  const h = $('#osHistory'); h.value = keep && [...h.options].some(x=> x.value===keep) ? keep : '';
+}
+function osSetHistM(id){ osHistM = id; osRenderHistory($('#osPart').value.trim()); }
 // 受注（緑）／在庫（黄）の切り替え。在庫は納期なしで、作る数だけ入れる
 let osStock = false, osStockWas = false;
 function osSetKind(stock, quiet){
   osStock = !!stock;
+  $('#orderSheet').classList.toggle('stock-mode', osStock);
   document.querySelectorAll('#osKind button').forEach(b=> b.classList.toggle('on', b.classList.contains(osStock ? 'k-stock' : 'k-order')));
   $('#osDueLab').hidden = osStock;
   $('#osQtyLab').textContent = osStock ? '在庫で作る数（個）' : '数量（個）';
   $('#osKindNote').innerHTML = osStock
-    ? '在庫：納期は入れません。受注が入ったら、このバーを押して「🟩 受注」に変え、納期を入れると緑になります。'
+    ? '在庫：「過去の品番」から選んで、コイルと作る数を入れるだけです（納期なし）。受注が入ったら、このバーを押して「🟩 受注」に変え、納期を入れると緑になります。'
     : (osStockWas ? '<b>在庫 → 受注に変えます。</b>納期を入れて保存すると緑のバーになります（作業中ならそのまま続きます）。' : '');
   if(!quiet){ osRefresh(); if(!osStock && !$('#osDue').value) setTimeout(()=>{ try{ $('#osDue').focus(); }catch(e){} }, 50); }
 }
@@ -6900,7 +6926,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.89';
+const APP_VERSION = '2026-06-28.90';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
