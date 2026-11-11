@@ -1720,6 +1720,64 @@ function onFreshReady(){
   retryRecPending();
   tickBoundaries();
   setTimeout(maybeMonthlyXlsx, 3000);   // 月が変わっていたら先月分のエクセルを出す（パソコンだけ）
+  setTimeout(checkLongStops, 1500);     // 長く止まったままの機械があれば知らせる
+}
+/* ===== 長く止まったままの機械を知らせる（画面を開いた時・しばらく閉じていて戻った時。全部の端末） =====
+   今日始まった停止（休憩は除く）が、休憩の時間を除いて LONG_STOP_DLG_MIN 分以上続いていたら出す。
+   同じ停止は、その端末で一度見たら1時間は出さない */
+const LONG_STOP_DLG_MIN = 60;
+const LONG_STOP_SEEN_KEY = 'genbaLongStopSeen';
+function breakOverlapMs(fromT, toT){
+  let ms = 0;
+  for(let d = new Date(fromT); d.setHours(0,0,0,0) <= toT; d.setDate(d.getDate()+1)){
+    BREAKS.forEach(b=>{
+      const s = new Date(d); s.setHours(b.sh, b.sm, 0, 0);
+      const e = new Date(d); e.setHours(b.eh, b.em, 0, 0);
+      ms += Math.max(0, Math.min(toT, e.getTime()) - Math.max(fromT, s.getTime()));
+    });
+  }
+  return ms;
+}
+function longStops(){
+  const now = nowMs(), today = dateKey(nowDate());
+  const out = [];
+  store.machines.forEach(m=>{
+    const r = activeFor(m.id); if(!r || r.status !== 'stopped') return;
+    const st = openStop(r); if(!st || st.reason === '休憩') return;
+    const f = new Date(st.from).getTime();
+    if(dateKey(new Date(f)) !== today) return;
+    const min = Math.floor((now - f - breakOverlapMs(f, now)) / 60000);
+    if(min >= LONG_STOP_DLG_MIN) out.push({ m:m.id, r, st, min, key: r.id + '|' + st.from });
+  });
+  return out;
+}
+let longStopTry = 0;
+async function checkLongStops(){
+  try{
+    if(!autoOk()) return;
+    let seen = {};
+    try{ seen = JSON.parse(localStorage.getItem(LONG_STOP_SEEN_KEY) || '{}') || {}; }catch(e){}
+    const now = nowMs();
+    Object.keys(seen).forEach(k=>{ if(now - seen[k] > 24*3600000) delete seen[k]; });
+    const list = longStops().filter(x=> !(seen[x.key] && now - seen[x.key] < 3600000));
+    if(!list.length) return;
+    // 入力の画面を開いている時は、閉じるまで待つ
+    if(document.querySelector('.ov.active')){ clearTimeout(longStopTry); longStopTry = setTimeout(checkLongStops, 5000); return; }
+    const lines = list.map(x=> `・${x.m}：${x.st.reason}　${fmtT(x.st.from)} から ${durLabel(x.min)}（休憩を除く）`);
+    const one = list.length === 1 ? list[0].m : null;
+    const p = confirmDialog('長く止まったままの機械があります',
+      lines.join('\n') + '\n\nもう動いているなら「再開」の押し忘れです。その機械を開いて「再開」を押してください。\n（押し忘れの時刻は、あとから日別集計の ✎ で直せます）',
+      one ? `${one} を開く` : 'わかった');
+    $('#cfCancel').textContent = '閉じる';
+    if(!one) $('#cfCancel').hidden = true;
+    list.forEach(x=> seen[x.key] = now);
+    try{ localStorage.setItem(LONG_STOP_SEEN_KEY, JSON.stringify(seen)); }catch(e){}
+    const ok = await p;
+    if(ok && one){
+      const tab = document.querySelector('.tab[data-tab="input"]'); if(tab) tab.click();
+      if(selectedMachineId !== one) selectMachine(one);
+    }
+  }catch(e){ console.warn('checkLongStops', e); }
 }
 function noteServerSnap(name, snap){
   if(snap.metadata.fromCache || srvSeen[name]) return;
@@ -7399,7 +7457,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.102';
+const APP_VERSION = '2026-06-28.103';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
