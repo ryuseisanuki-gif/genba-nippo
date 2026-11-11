@@ -7125,6 +7125,11 @@ function osSetKind(stock, quiet){
   $('#osStockBox').hidden = !osStock;
   osRenderStockInfo();
   document.querySelectorAll('#osKind button').forEach(b=> b.classList.toggle('on', b.classList.contains(osStock ? 'k-stock' : 'k-order')));
+  // 在庫を開いた時は、受注への切り替えが分かるように
+  const ko = document.querySelector('#osKind .k-order'), ks = document.querySelector('#osKind .k-stock');
+  ko.textContent = osStockWas ? (osStock ? '🟩 受注が来た → 受注に切り替える' : '🟩 受注に切り替え中') : '🟩 受注';
+  ks.textContent = osStockWas ? '🟨 在庫のまま' : '🟨 在庫';
+  if(osStockWas) $('#osTitle').innerHTML = esc(osStock ? '在庫の編集' : '在庫を受注に切り替える') + demoChip();
   $('#osDueLab').hidden = osStock;
   $('#osQtyLab').textContent = osStock ? '在庫で作る数（個）' : '数量（個）';
   $('#osKindNote').innerHTML = osStock
@@ -7343,7 +7348,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.99';
+const APP_VERSION = '2026-06-28.100';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
