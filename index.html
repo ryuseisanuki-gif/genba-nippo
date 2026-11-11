@@ -7028,32 +7028,41 @@ function osRenderStockInfo(){
 }
 // 受注の画面の「在庫から使う」
 let osUseTouched = false;   // 手で選んだ・直した（作業中・在庫・もう使う分が決まっている注文も自動では変えない）
+// 「在庫から使う」に出す在庫：この注文と同じ材料（コイル）の在庫だけ。残りがある物と、この注文がもう使っている物
+function osUseCands(){
+  const coil = $('#osCoil').value || '';
+  const o0 = osId ? store.orders.find(x=> x.id===osId) : null;
+  return stockNameList().filter(x=> (x.o.coilId || '') === coil &&
+    (osUseAvail(x.name) > 0 || (o0 && o0.useStock && o0.useStock.name === x.name)));
+}
+// 材料が変わったら出し直す（選んでいた在庫が別の材料になったら外す）
+function osUpdateUseOptions(){
+  const box = $('#osUseBox'); if(!box) return;
+  const sel = $('#osUseName'), cur = sel.value, curQty = $('#osUseQty').value;
+  const list = osStock ? [] : osUseCands();
+  box.hidden = !list.length;
+  sel.innerHTML = '<option value="">（在庫は使わない）</option>' + list.map(x=>
+    `<option value="${esc(x.name)}">${esc(x.name)}（あと ${osUseAvail(x.name).toLocaleString()}個）</option>`).join('');
+  if(list.some(x=> x.name===cur)){ sel.value = cur; $('#osUseQty').value = curQty; }
+  else { sel.value = ''; $('#osUseQty').value = ''; }
+}
 function osRenderUse(o){
   const box = $('#osUseBox'); if(!box) return;
   osUseTouched = !!(o && (o.useStock || o.startedAt || isStock(o) || o.done));
-  const names = stockNameList().filter(x=> isStock(x.o) || stockCount(x.name).now > 0 || (o && o.useStock && o.useStock.name === x.name));
-  box.hidden = !names.length;
-  const cur = o && o.useStock ? o.useStock.name : '';
-  $('#osUseName').innerHTML = '<option value="">（在庫は使わない）</option>' + names.map(x=>{
-    const c = stockCount(x.name), mine = (o && o.useStock && o.useStock.name === x.name) ? usedStockQty(o) : 0;
-    return `<option value="${esc(x.name)}">${esc(x.name)}（あと ${(c.now + mine).toLocaleString()}個）</option>`;
-  }).join('');
-  $('#osUseName').value = names.some(x=> x.name===cur) ? cur : '';
+  $('#osUseName').innerHTML = o && o.useStock ? `<option value="${esc(o.useStock.name)}"></option>` : '';
+  $('#osUseName').value = o && o.useStock ? o.useStock.name : '';
   $('#osUseQty').value = o && o.useStock && o.useStock.qty ? o.useStock.qty : '';
+  osUpdateUseOptions();
 }
-// 在庫は基本ぜんぶ使う：同じ材料の在庫（無ければ在庫が1つだけの時はそれ）を選び、ある分を全部（数量まで）使う
+// 在庫は基本ぜんぶ使う：同じ材料の在庫（一番新しい物）を選び、ある分を全部（数量まで）使う
 function osAutoUse(){
   if(osStock || osStockWas || osUseTouched) return;
   const box = $('#osUseBox'); if(!box || box.hidden) return;
   const qty = parseInt($('#osQty').value) || 0;
-  const coil = $('#osCoil').value;
-  const cand = stockNameList().map(x=> ({ x, av:osUseAvail(x.name) })).filter(y=> y.av > 0);
-  let pick = coil ? cand.filter(y=> y.x.o.coilId === coil) : [];
-  if(!pick.length && !coil && cand.length === 1) pick = cand;   // 材料が決まっていない注文だけ（別の材料の在庫は自動では使わない）
-  const p = pick[0];   // 一番新しい在庫
+  const p = osUseCands()[0];
   if(!p || !(qty > 0)){ $('#osUseName').value = ''; $('#osUseQty').value = ''; return; }
-  $('#osUseName').value = p.x.name;
-  $('#osUseQty').value = Math.min(p.av, qty);
+  $('#osUseName').value = p.name;
+  $('#osUseQty').value = Math.min(osUseAvail(p.name), qty);
 }
 function osUseChanged(){
   osUseTouched = true;
@@ -7116,6 +7125,7 @@ function osRefresh(){
     if(!osStock || lc) $('#osCoil').value = lc || '';
   }
   if(!osNameTouched && !osStock) $('#osName').value = part ? partNameOf(part) : '';       // 品名は登録済みのものを自動
+  osUpdateUseOptions();   // 在庫は同じ材料の物だけ出す
   osAutoUse();   // 材料が決まってから在庫を選ぶ
   const o0 = osId ? store.orders.find(x=>x.id===osId) : null;
   const sched = !$('#osSched').hidden;
@@ -7290,7 +7300,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.96';
+const APP_VERSION = '2026-06-28.97';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
