@@ -540,7 +540,9 @@
   #addStopChips .chip.run-chip.sel{background:var(--run);color:#fff;}
   .es-del{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:13px;font-weight:700;color:var(--run);}
   .es-del input{width:18px;height:18px;}
-  .es-row.del .time-row{opacity:.4;}
+  .es-row.del .time-row,.es-row.del .es-rs{opacity:.4;}
+  .es-rs{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--ink2);margin-bottom:6px;}
+  .es-rs select{flex:1;padding:8px;border:1.5px solid var(--line);border-radius:8px;font-weight:700;font-size:14px;background:#fff;}
   .sum-legend i.nowork{background:#b8c0cc;}
   .idle-gap{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 10px;border-radius:10px;background:var(--pause-bg);color:var(--pause-d);font-size:12.5px;font-weight:700;}
   .idle-gap span{flex:1;}
@@ -1339,7 +1341,7 @@
 <div class="ov" id="editStopSheet">
   <div class="sheet">
     <div class="grab"></div>
-    <h3>停止時間の修正</h3>
+    <h3>停止の修正（時間・理由）</h3>
     <p class="add-stop-mc" id="editStopHead"></p>
     <div id="editStopList"></div>
     <div class="sheet-actions">
@@ -4755,7 +4757,9 @@ function openEditStops(machineId, reasonKey){
       if(dateKey(new Date(s.from))!==dk) return;
       const ri = editStopRefs.length;
       editStopRefs.push({ recId:r.id, idx, reason:s.reason, from0:s.from, to0:s.to||null });
-      rows.push(`<div class="es-row"><div class="time-row">
+      const rs = [...document.querySelectorAll('#stopChips .chip')].map(c=> c.textContent.trim());
+      if(!rs.includes(s.reason)) rs.push(s.reason);
+      rows.push(`<div class="es-row"><label class="es-rs">理由<select id="es-rs-${ri}">${rs.map(x=> `<option value="${esc(x)}"${x===s.reason?' selected':''}>${esc(x)}</option>`).join('')}</select></label><div class="time-row">
         <label>開始<input type="time" id="es-from-${ri}" value="${hhmm(new Date(s.from))}"></label>
         <label>終了<input type="time" id="es-to-${ri}" value="${s.to?hhmm(new Date(s.to)):''}"></label>
       </div><label class="es-del"><input type="checkbox" id="es-del-${ri}" onchange="this.closest('.es-row').classList.toggle('del', this.checked)">作業中だった（この停止を消して、動いていたことにする）</label></div>`);
@@ -4784,7 +4788,7 @@ async function saveEditStop(){
       to=new Date(base0); to.setHours(th,tm,0,0);
       if(to.getTime()<=from.getTime()){ ok=false; return null; }
     }
-    return { ref, from: from.toISOString(), to: to ? to.toISOString() : null };
+    return { ref, from: from.toISOString(), to: to ? to.toISOString() : null, reason: ($('#es-rs-'+ri)||{}).value || ref.reason };
   });
   if(!ok){ toast('時刻を確認してください（終了は開始より後）','error'); return; }
   // 最新を読み込み、直そうとしている停止が他の端末で変わっていないか確かめる
@@ -4805,7 +4809,7 @@ async function saveEditStop(){
   vals.forEach(v=>{
     const st = findStop(v.ref); if(!st) return;
     if(v.del){ const r = store.records.find(x=> x.id===v.ref.recId); r.stops = r.stops.filter(x=> x!==st); delN++; }
-    else { st.from = v.from; st.to = v.to; }
+    else { st.from = v.from; st.to = v.to; if(v.reason) st.reason = v.reason; }   // 理由も直せる
   });
   // 開いていた停止を閉じたら、停止中のレコードは稼働中に戻す
   [...new Set(editStopRefs.map(x=>x.recId))].forEach(id=>{
@@ -4814,7 +4818,7 @@ async function saveEditStop(){
   });
   save();
   closeEditStop();
-  toast(delN ? `停止を${delN}件消して、動いていたことにしました` : '停止時間を修正しました','success');
+  toast(delN ? `停止を${delN}件消して、動いていたことにしました` : '停止を修正しました','success');
   renderSummary(); renderMachineGrid(); renderStatus(); renderRecords();
 }
 
@@ -7395,7 +7399,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.101';
+const APP_VERSION = '2026-06-28.102';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
