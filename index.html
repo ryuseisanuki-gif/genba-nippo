@@ -923,6 +923,14 @@
   .os-use select{flex:1.4;min-width:0;padding:8px;border:1.5px solid var(--line);border-radius:8px;font-weight:700;font-size:13.5px;background:#fff;}
   .os-use input{flex:1;min-width:0;padding:8px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--mono);font-weight:800;font-size:14px;}
   .os-use .r{font-size:12.5px;font-weight:700;color:var(--ink2);margin-top:6px;}
+  .os-use-tg{display:flex;gap:8px;}
+  .os-use-tg button{flex:1;padding:9px 6px;border-radius:9px;border:2px solid var(--line);background:#fff;font-weight:800;font-size:13.5px;color:var(--ink2);cursor:pointer;}
+  .os-use-tg button.on{border-color:#d9a400;background:#fff3bf;color:#7a5600;}
+  .os-use-tg button.on.off{border-color:var(--ink3);background:var(--surface2);color:var(--ink);}
+  .os-use #osUseName{width:100%;margin-top:6px;}
+  .os-use-more{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;}
+  .os-use-more a{color:var(--ink3);font-weight:700;}
+  .os-use-more input{width:120px;flex:0 0 auto;}
   #orderSheet.stock-mode .os-use{display:none;}
   .os-kind-note{font-size:12px;color:var(--ink3);font-weight:600;margin:0 0 6px;line-height:1.5;}
   .oc-alt{font-size:12px;font-weight:700;color:var(--blue);}
@@ -1395,12 +1403,17 @@
         <label id="osDueLab">納期<input type="date" id="osDue" class="of-in mono" oninput="osRefresh()"></label>
       </div>
       <div class="os-use" id="osUseBox" hidden>
-        <div class="h">🟨 在庫から使う（ある分は自動で全部使い、残りだけ作ります）</div>
-        <div class="row">
-          <select id="osUseName" onchange="osUseChanged()"></select>
-          <input type="number" id="osUseQty" inputmode="numeric" min="0" placeholder="使う数（個）" oninput="osUseTouched = true; osRefresh()">
+        <div class="h">🟨 在庫（同じ材料）</div>
+        <div class="os-use-tg">
+          <button type="button" id="osUseOnBtn" onclick="osSetUse(true)">在庫を使う（全部）</button>
+          <button type="button" id="osUseOffBtn" class="off" onclick="osSetUse(false)">使わない</button>
         </div>
+        <select id="osUseName" onchange="osUseChanged()" hidden></select>
         <div class="r" id="osUseInfo"></div>
+        <div class="os-use-more">
+          <a href="#" id="osUseMoreLink" onclick="osToggleUseMore();return false">個数を指定する（オプション）</a>
+          <input type="number" id="osUseQty" inputmode="numeric" min="0" placeholder="使う数（個）" oninput="osUseTouched = true; osRefresh()" hidden>
+        </div>
       </div>
       <div class="of2" id="osSched" hidden>
         <label>機械<select id="osMach" class="of-in" onchange="osRefresh()"></select></label>
@@ -7031,7 +7044,20 @@ function osRenderStockInfo(){
     `<label>最大在庫 <input type="number" id="osStockMax" inputmode="numeric" min="0" value="${c.max || ''}" placeholder="なし" oninput="osRefresh()"> 個</label>`;
 }
 // 受注の画面の「在庫から使う」
-let osUseTouched = false;   // 手で選んだ・直した（作業中・在庫・もう使う分が決まっている注文も自動では変えない）
+let osUseTouched = false;   // 手で選んだ・個数を直した（もう使う分が決まっている注文も自動では変えない）
+let osUseOff = false;       // 「使わない」（作業中・在庫・完了の注文は最初から使わない）
+function osSetUse(on){
+  osUseOff = !on; osUseTouched = false;
+  if(!on){ $('#osUseName').value = ''; $('#osUseQty').value = ''; $('#osUseQty').hidden = true; }
+  osRefresh();
+}
+function osToggleUseMore(){
+  const q = $('#osUseQty');
+  q.hidden = !q.hidden;
+  if(q.hidden){ osUseTouched = false; }      // 閉じたら「全部使う」に戻す
+  else { osUseOff = false; setTimeout(()=>{ try{ q.focus(); q.select(); }catch(e){} }, 50); }
+  osRefresh();
+}
 // 「在庫から使う」に出す在庫：この注文と同じ材料（コイル）の在庫だけ。残りがある物と、この注文がもう使っている物
 function osUseCands(){
   const coil = $('#osCoil').value || '';
@@ -7045,6 +7071,7 @@ function osUpdateUseOptions(){
   const sel = $('#osUseName'), cur = sel.value, curQty = $('#osUseQty').value;
   const list = osStock ? [] : osUseCands();
   box.hidden = !list.length;
+  sel.hidden = list.length <= 1 || osUseOff;   // 同じ材料の在庫が2つ以上ある時だけ選ぶ
   sel.innerHTML = '<option value="">（在庫は使わない）</option>' + list.map(x=>
     `<option value="${esc(x.name)}">${esc(x.name)}（あと ${osUseAvail(x.name).toLocaleString()}個）</option>`).join('');
   if(list.some(x=> x.name===cur)){ sel.value = cur; $('#osUseQty').value = curQty; }
@@ -7052,7 +7079,10 @@ function osUpdateUseOptions(){
 }
 function osRenderUse(o){
   const box = $('#osUseBox'); if(!box) return;
-  osUseTouched = !!(o && (o.useStock || o.startedAt || isStock(o) || o.done));
+  osUseTouched = !!(o && o.useStock);
+  osUseOff = !!(o && !o.useStock && (o.noStock || o.startedAt || isStock(o) || o.done));   // 「使わない」で保存した注文はそのまま
+  const full = o && o.useStock ? Math.min(osUseAvail(o.useStock.name), o.qty || 0) : 0;
+  $('#osUseQty').hidden = !(o && o.useStock && o.useStock.qty < full);   // 全部より少なく使っている注文だけ個数を見せる
   $('#osUseName').innerHTML = o && o.useStock ? `<option value="${esc(o.useStock.name)}"></option>` : '';
   $('#osUseName').value = o && o.useStock ? o.useStock.name : '';
   $('#osUseQty').value = o && o.useStock && o.useStock.qty ? o.useStock.qty : '';
@@ -7060,8 +7090,9 @@ function osRenderUse(o){
 }
 // 在庫は基本ぜんぶ使う：同じ材料の在庫（一番新しい物）を選び、ある分を全部（数量まで）使う
 function osAutoUse(){
-  if(osStock || osStockWas || osUseTouched) return;
+  if(osStock || osUseTouched) return;
   const box = $('#osUseBox'); if(!box || box.hidden) return;
+  if(osUseOff){ $('#osUseName').value = ''; $('#osUseQty').value = ''; return; }
   const qty = parseInt($('#osQty').value) || 0;
   const p = osUseCands()[0];
   if(!p || !(qty > 0)){ $('#osUseName').value = ''; $('#osUseQty').value = ''; return; }
@@ -7069,7 +7100,7 @@ function osAutoUse(){
   $('#osUseQty').value = Math.min(osUseAvail(p.name), qty);
 }
 function osUseChanged(){
-  osUseTouched = true;
+  osUseTouched = true; osUseOff = false;
   const nm = $('#osUseName').value;
   if(!nm) $('#osUseQty').value = '';
   else $('#osUseQty').value = Math.min(osUseAvail(nm), parseInt($('#osQty').value) || osUseAvail(nm));   // 選んだ在庫も、ある分を全部
@@ -7080,7 +7111,7 @@ function osUseAvail(name){
   return stockCount(name).now + ((o0 && o0.useStock && o0.useStock.name === name) ? usedStockQty(o0) : 0);
 }
 function osUseVal(){
-  const name = (!osStock && $('#osUseName')) ? $('#osUseName').value : '';
+  const name = (!osStock && !osUseOff && $('#osUseName')) ? $('#osUseName').value : '';
   const qty = name ? (parseInt($('#osUseQty').value) || 0) : 0;
   return name && qty > 0 ? { name, qty } : null;
 }
@@ -7142,14 +7173,21 @@ function osRefresh(){
     spm:parseInt($('#osSpm').value)||null, spp:parseInt($('#osSpp').value)||null, coilId:$('#osCoil').value||null, useStock: osUseVal() };
   const calc = $('#osCalc');
   const ui = $('#osUseInfo');
-  if(ui){
-    const u = tmp.useStock, nm = !osStock && $('#osUseName') ? $('#osUseName').value : '';
-    if(!nm) ui.innerHTML = '';
-    else {
+  if(ui && !$('#osUseBox').hidden){
+    $('#osUseOnBtn').classList.toggle('on', !osUseOff);
+    $('#osUseOffBtn').classList.toggle('on', osUseOff);
+    $('#osUseMoreLink').textContent = $('#osUseQty').hidden ? '個数を指定する（オプション）' : '個数の指定をやめる（全部使う）';
+    const u = tmp.useStock, nm = !osStock && !osUseOff ? $('#osUseName').value : '';
+    if(osUseOff) ui.innerHTML = '在庫は使いません（数量を全部作ります）';
+    else if(!nm){
+      const c0 = osUseCands()[0];
+      ui.innerHTML = c0 ? `数量を入れると「${esc(c0.name)}」（あと ${osUseAvail(c0.name).toLocaleString()}個）から全部使います` : '';
+    } else {
       const av = osUseAvail(nm);
-      ui.innerHTML = `この在庫は あと <b>${av.toLocaleString()}個</b>` +
-        (u ? (u.qty > av ? `　<span class="bad">在庫が ${(u.qty - av).toLocaleString()}個 足りません</span>`
-          : tmp.qty > 0 ? (u.qty >= tmp.qty ? '　<b>全部在庫でまかなえます（作らない）</b>' : `　→ 作る数 <b>${(tmp.qty - u.qty).toLocaleString()}個</b>（使ったあと在庫 ${(av - u.qty).toLocaleString()}個）`) : '') : '');
+      ui.innerHTML = !u ? `「${esc(nm)}」あと ${av.toLocaleString()}個` :
+        u.qty > av ? `<span class="bad">「${esc(nm)}」は あと ${av.toLocaleString()}個 です（${(u.qty - av).toLocaleString()}個 足りません）</span>` :
+        tmp.qty > 0 && u.qty >= tmp.qty ? `「${esc(nm)}」から ${u.qty.toLocaleString()}個 使います　<b>全部在庫でまかなえます（作らない）</b>` :
+        `「${esc(nm)}」から <b>${u.qty.toLocaleString()}個</b> 使います → 作る数 <b>${Math.max(0, tmp.qty - u.qty).toLocaleString()}個</b>（使ったあと在庫 ${(av - u.qty).toLocaleString()}個）`;
     }
   }
   if(!part || !mId){
@@ -7208,6 +7246,7 @@ async function saveOrder(){
   o.partNo = part; o.qty = qty; o.due = osStock ? '' : due; o.coilId = $('#osCoil').value || null;
   o.stock = osStock;
   if(use) o.useStock = use; else delete o.useStock;
+  if(!osStock && osUseOff && !$('#osUseBox').hidden) o.noStock = true; else delete o.noStock;   // 「使わない」を選んだことを覚える
   if(allStock){ o.done = true; o.doneAt = nowDate().toISOString(); o.doneQty = 0; }
   if(osStock){
     o.stockName = part; o.partName = '';   // 在庫の名前は品番マスターに入れない
@@ -7304,7 +7343,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.98';
+const APP_VERSION = '2026-06-28.99';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
