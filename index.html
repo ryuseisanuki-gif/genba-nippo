@@ -904,6 +904,19 @@
   /* 在庫は「在庫の名前・コイル・回転数・作る数」だけ */
   #orderSheet.stock-mode .os-scan .btn-scan,#orderSheet.stock-mode .os-scan .btn-scan-photo,#orderSheet.stock-mode #osHistRow,#orderSheet.stock-mode #osHistM,#orderSheet.stock-mode #osNameLab,#orderSheet.stock-mode #osPartLab{display:none;}
   #osStockBox .os-hist-m button{font-family:inherit;}
+  .stock-list{display:flex;flex-direction:column;gap:8px;margin:0 0 14px;}
+  .stk{background:var(--surface);border:1.5px solid var(--line);border-left:5px solid #d9a400;border-radius:12px;padding:10px 14px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;}
+  .stk .nm{font-weight:900;font-size:15px;min-width:150px;}
+  .stk .now{font-family:var(--mono);font-weight:900;font-size:20px;color:#7a5600;}
+  .stk .now small{font-size:12px;font-weight:700;color:var(--ink3);margin-left:2px;}
+  .stk .over{color:var(--stop);font-weight:800;font-size:12.5px;}
+  .stk .mx{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--ink2);}
+  .stk .mx input{width:96px;padding:6px 8px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--mono);font-weight:800;font-size:14px;}
+  .stk .sub{font-size:12px;color:var(--ink3);font-weight:600;}
+  .stk button{margin-left:auto;padding:7px 12px;border-radius:9px;border:1.5px solid var(--line);background:#fff;font-weight:800;font-size:12.5px;cursor:pointer;}
+  .os-stock-info{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;font-size:13px;font-weight:700;color:var(--ink2);margin:-2px 0 6px;}
+  .os-stock-info b{font-family:var(--mono);color:#7a5600;font-size:15px;}
+  .os-stock-info input{width:96px;padding:6px 8px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--mono);font-weight:800;font-size:14px;}
   .os-kind-note{font-size:12px;color:var(--ink3);font-weight:600;margin:0 0 6px;line-height:1.5;}
   .oc-alt{font-size:12px;font-weight:700;color:var(--blue);}
   .oc-btns{display:flex;gap:8px;margin-top:2px;}
@@ -1084,6 +1097,10 @@
   <div id="planOtherWrap" hidden>
     <div class="pool-head"><span class="t">📥 その他のプール</span><span class="s" id="planOtherSub"></span></div>
     <div class="pool" id="planPoolOther" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
+  </div>
+  <div id="planStockWrap" hidden>
+    <div class="pool-head"><span class="t">🟨 在庫</span><span class="s" id="planStockSub"></span></div>
+    <div class="stock-list" id="planStock"></div>
   </div>
   <div class="kakou-info" id="kakouInfo"></div>
   <div class="set-note">速さは、その機械でその品番を作った日の記録（動いていた時間あたりの個数）から計算します。記録が5日未満の品番は理論値（回転数÷何回転で1個）で、1日の稼働を90%として計算します。土日祝と休止日は数えません。納期の日までに作り終われば「間に合う」です。</div>
@@ -1342,6 +1359,7 @@
       <div id="osStockBox" hidden>
         <label>在庫の名前<input type="text" id="osStockName" class="of-in" autocomplete="off" placeholder="例 棚柱1820 在庫" oninput="osStockNameInput()"></label>
         <div class="os-hist-m" id="osStockNames"></div>
+        <div class="os-stock-info" id="osStockInfo"></div>
       </div>
       <label id="osNameLab">品名（任意）<input type="text" id="osName" class="of-in" autocomplete="off" placeholder="空でもOK（例 SUS430棚柱）" oninput="osNameInput()"></label>
       <!-- 日報入力の「バーコードを読み取る」と同じ入力（デモ中のパソコンはここで入れる） -->
@@ -2483,6 +2501,7 @@ function confirmDialog(title, msg, okLabel='OK', danger=false){
     ok.onclick = ()=>resolveConfirm(true);
     cancel.onclick = ()=>resolveConfirm(false);
     cancel.textContent = 'キャンセル';
+    cancel.hidden = false;
     $('#cfAlt').hidden = true;
     $('#confirmSheet').classList.add('active');
   });
@@ -3747,25 +3766,35 @@ async function askStockShutdown(r){
   try{
     const so = r && stockOrderOf(r);
     if(!so) return;
-    const mid = r.machineId;
+    const mid = r.machineId, name = stockNameOf(so);
+    const head = `在庫の作業「${name}」が終わりました。\n${stockNowText(name)}`;
     const t = tomorrowDate(), from = dateKey(t);
-    if(isShutdown(t, mid)) return;   // 明日がもう休止なら聞かない
     let nx = null;
     try{ nx = nextOrderFor(mid); }catch(e){}
-    let to = '';
-    if(nx){
+    // 休業を聞くか（明日がもう休止・次の予定が今日か明日から・間が土日祝だけ、の時は聞かない）
+    let ask = !isShutdown(t, mid), to = '';
+    if(ask && nx){
       to = numKey(nx.s.d - 1);
-      if(to < from) return;           // 次の予定が今日・明日から始まるので休業は要らない
-      // 間の日がぜんぶ土日祝なら聞かない
-      let work = false;
-      for(let d = new Date(t); dateKey(d) <= to; d.setDate(d.getDate()+1)){ if(!offDay(d)){ work = true; break; } }
-      if(!work) return;
-      const a = await askWithInput('休業にしますか？',
-        `在庫の作業「${stockName(so)}」が終わりました。\n${mid} を ${fmtKey(from)} 〜 ${fmtKey(to)} 休業にしますか？\n（次の予定「${nx.o.partNo}」が ${numMDW(nx.s.d)} から始まるので、その前日まで）`,
+      if(to < from) ask = false;
+      else {
+        let work = false;
+        for(let d = new Date(t); dateKey(d) <= to; d.setDate(d.getDate()+1)){ if(!offDay(d)){ work = true; break; } }
+        if(!work) ask = false;
+      }
+    }
+    if(!ask){   // お知らせだけ
+      const p = confirmDialog('在庫を作り終えました', head, 'OK');
+      $('#cfCancel').hidden = true;
+      await p;
+      return;
+    }
+    if(nx){
+      const a = await askWithInput('在庫を作り終えました',
+        `${head}\n\n${mid} を ${fmtKey(from)} 〜 ${fmtKey(to)} 休業にしますか？\n（次の予定「${nx.o.partNo}」が ${numMDW(nx.s.d)} から始まるので、その前日まで）`,
         '休業にする', '休業にしない');
       if(a.v !== 'ok') return;
     } else {
-      to = await pickShutdownEnd('休業にしますか？', `在庫の作業「${stockName(so)}」が終わりました。\n${mid} にはこのあとの予定がありません。`);
+      to = await pickShutdownEnd('在庫を作り終えました', `${head}\n\n${mid} にはこのあとの予定がありません。休業にしますか？`);
       if(!to) return;
     }
     addMachineShutdown(mid, from, to, '在庫の作業のあと');
@@ -5933,6 +5962,7 @@ function renderPlanPool(){
   }
   bulkRefresh('pool');
   renderKakouInfo();
+  renderPlanStock();
   renderPlanOverdue();
   renderPlanTrash();
 }
@@ -6809,7 +6839,7 @@ function openOrderSheet(id){
   }
   $('#osMore').hidden = !o;
   $('#osToPoolBtn').hidden = !sched;
-  osRenderStockNames();
+  osRenderStockNames(); osRenderStockInfo();
   $('#orderSheet').classList.add('active');
   osRefresh();
 }
@@ -6875,7 +6905,7 @@ function osApplyStockMemory(name){
 function osPickStockName(name){
   $('#osStockName').value = name;
   osApplyStockMemory(name);
-  osRenderStockNames(); osRefresh();
+  osRenderStockNames(); osRenderStockInfo(); osRefresh();
   const got = [];
   const c = store.coils.find(x=>x.id===$('#osCoil').value); if(c) got.push('コイル ' + c.name);
   if($('#osSpm').value) got.push($('#osSpm').value + '回転/分');
@@ -6885,7 +6915,94 @@ function osPickStockName(name){
 function osStockNameInput(){
   const n = $('#osStockName').value.trim();
   osApplyStockMemory(n);   // 前に使った名前と同じになったら呼び出す
-  osRenderStockNames(); osRefresh();
+  osRenderStockNames(); osRenderStockInfo(); osRefresh();
+}
+/* ===== 在庫の数 =====
+   在庫の数＝在庫のまま作り終えた作業の個数の合計＋手で直した分。作っている途中で受注に切り替えたものは在庫に入れない（受注の分）。
+   最大在庫・手で直した分は settings/stockInfo に名前ごとに持つ（{ items:{ 名前:{ max, adj, log:[{at, d, to}] } } }） */
+function stockInfoDoc(create){
+  store.settings = store.settings || [];
+  let d = store.settings.find(x=> x.id==='stockInfo');
+  if(!d && create){ d = { id:'stockInfo', items:{} }; store.settings.push(d); }
+  if(d && !d.items) d.items = {};
+  return d || { items:{} };
+}
+function stockItem(name){ return stockInfoDoc().items[name] || {}; }
+function stockOrderMade(o){
+  const r = o.recId ? store.records.find(x=> x.id===o.recId) : null;
+  if(r && r.status==='done') return recordTotalQty(r);
+  if(o.done) return o.doneQty || 0;
+  return 0;   // まだ作っている途中の分は、終わってから数える
+}
+function stockCount(name){
+  let made = 0, running = 0, planned = 0;
+  (store.orders||[]).forEach(o=>{
+    if(!isStock(o) || stockNameOf(o) !== name) return;
+    const r = o.recId ? store.records.find(x=> x.id===o.recId) : null;
+    if(o.done || (r && r.status==='done')) made += stockOrderMade(o);
+    else if(o.startedAt) running++;
+    else planned++;
+  });
+  const it = stockItem(name);
+  const now = made + (it.adj || 0);
+  const max = it.max > 0 ? it.max : null;
+  return { made, now, max, running, planned, over: max != null && now > max };
+}
+function stockNowText(name){
+  const c = stockCount(name);
+  return `今の在庫 ${c.now.toLocaleString()}個` + (c.max != null ? `（最大 ${c.max.toLocaleString()}個）` : '') + (c.over ? `\n⚠ 最大在庫を ${(c.now - c.max).toLocaleString()}個 超えています` : '');
+}
+function setStockMax(name, v){
+  name = String(name||'').trim(); if(!name) return;
+  const n = parseInt(v);
+  const d = stockInfoDoc(true), it = d.items[name] || (d.items[name] = {});
+  const before = it.max || null;
+  it.max = n > 0 ? n : null;
+  if(before === it.max) return;
+  save(); renderPlanStock();
+  toast(it.max ? `${name}：最大在庫を ${it.max.toLocaleString()}個 にしました` : `${name}：最大在庫を外しました`, 'success');
+}
+async function fixStockCount(name){
+  const c = stockCount(name);
+  const a = await askWithInput('在庫の数を直す',
+    `「${name}」の今の在庫は ${c.now.toLocaleString()}個 です（作った数の合計から）。\n受注に使った・数え直した時は、今ある数を入れてください。`,
+    '直す', 'キャンセル', `<input type="number" id="cfStock" inputmode="numeric" min="0" value="${c.now}" style="flex:1">`);
+  if(a.v !== 'ok') return;
+  const n = parseInt(a.val);
+  if(!(n >= 0)){ toast('数を入れてください','error'); return; }
+  if(n === c.now) return;
+  const d = stockInfoDoc(true), it = d.items[name] || (d.items[name] = {});
+  it.adj = (it.adj || 0) + (n - c.now);
+  it.log = (it.log || []).concat([{ at:nowDate().toISOString(), d:n - c.now, to:n }]).slice(-20);
+  save(); renderPlanStock();
+  toast(`${name}：在庫を ${n.toLocaleString()}個 に直しました`, 'success');
+}
+function renderPlanStock(){
+  const wrap = $('#planStockWrap'); if(!wrap) return;
+  const list = stockNameList().filter(x=> isStock(x.o) || stockCount(x.name).made || stockItem(x.name).max || stockItem(x.name).adj);
+  wrap.hidden = !list.length;
+  if(!list.length) return;
+  $('#planStockSub').textContent = `${list.length}件・在庫のまま作り終えた個数の合計（途中で受注に切り替えた分は入りません）`;
+  $('#planStock').innerHTML = list.map(x=>{
+    const c = stockCount(x.name), nm = esc(x.name);
+    return `<div class="stk">
+      <span class="nm">${nm}</span>
+      <span class="now">${c.now.toLocaleString()}<small>個</small></span>
+      ${c.over ? `<span class="over">⚠ 最大を ${(c.now - c.max).toLocaleString()}個 超えています</span>` : ''}
+      <label class="mx">最大在庫<input type="number" inputmode="numeric" min="0" value="${c.max || ''}" placeholder="なし" data-n="${nm}" onchange="setStockMax(this.dataset.n, this.value)">個</label>
+      <span class="sub">${[c.running ? '作業中 ' + c.running + '件' : '', c.planned ? '予定 ' + c.planned + '件' : ''].filter(Boolean).join('・')}</span>
+      <button type="button" data-n="${nm}" onclick="fixStockCount(this.dataset.n)">数を直す</button>
+    </div>`;
+  }).join('');
+}
+// 注文の画面（在庫）：その名前の今の在庫と最大在庫
+function osRenderStockInfo(){
+  const el = $('#osStockInfo'); if(!el) return;
+  const name = $('#osStockName').value.trim();
+  if(!osStock || !name){ el.innerHTML = ''; return; }
+  const c = stockCount(name);
+  el.innerHTML = `<span>今の在庫 <b>${c.now.toLocaleString()}</b> 個</span>` +
+    `<label>最大在庫 <input type="number" id="osStockMax" inputmode="numeric" min="0" value="${c.max || ''}" placeholder="なし" oninput="osRefresh()"> 個</label>`;
 }
 // 注文の画面で今の「品番」（在庫は名前）
 function osPartVal(){ return (osStock ? $('#osStockName').value : $('#osPart').value).trim(); }
@@ -6895,6 +7012,7 @@ function osSetKind(stock, quiet){
   osStock = !!stock;
   $('#orderSheet').classList.toggle('stock-mode', osStock);
   $('#osStockBox').hidden = !osStock;
+  osRenderStockInfo();
   document.querySelectorAll('#osKind button').forEach(b=> b.classList.toggle('on', b.classList.contains(osStock ? 'k-stock' : 'k-order')));
   $('#osDueLab').hidden = osStock;
   $('#osQtyLab').textContent = osStock ? '在庫で作る数（個）' : '数量（個）';
@@ -6951,6 +7069,10 @@ function osRefresh(){
   if(tmp.qty > 0){
     const c = orderCalc(tmp, mId);
     h += `<br>目標時間 <b>約${planFmtHours(c.min)}</b>　見込み <b>${planFmtDays(c.need)}日</b>（止まらなければ ${planFmtDays(c.fast)}日）`;
+    if(osStock){
+      const sc = stockCount(part), mx = parseInt(($('#osStockMax')||{}).value) || null, after = sc.now + tmp.qty;
+      h += `<br>作り終えると在庫 <b>${after.toLocaleString()}個</b>` + (mx && after > mx ? `　<span class="bad">最大在庫（${mx.toLocaleString()}個）を ${(after - mx).toLocaleString()}個 超えます</span>` : '');
+    }
     if(tmp.due || osStock){
       const st = $('#osStart').value;
       if(sched && st){
@@ -6982,6 +7104,8 @@ function saveOrder(){
   o.stock = osStock;
   if(osStock){
     o.stockName = part; o.partName = '';   // 在庫の名前は品番マスターに入れない
+    const mxEl = $('#osStockMax');
+    if(mxEl){ const d = stockInfoDoc(true), it = d.items[part] || (d.items[part] = {}); const n = parseInt(mxEl.value); it.max = n > 0 ? n : null; }
   } else {
     const pname = $('#osName').value.trim();   // 品名は任意（空でも保存できる）
     o.partName = pname;
@@ -7072,7 +7196,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.93';
+const APP_VERSION = '2026-06-28.94';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
