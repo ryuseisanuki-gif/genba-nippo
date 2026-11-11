@@ -6372,12 +6372,25 @@ function planStartEdit(){
   renderPlan();
   toast('編集モードにしました。終わったら「確定」を押してください');
 }
+// 作業中の在庫を受注に切り替えたら、その作業の記録の品番も受注の品番にする（記録の品番が在庫の名前のままの時だけ）
+function syncStockRecNames(){
+  const out = [];
+  (store.orders||[]).forEach(o=>{
+    if(isStock(o) || !o.stockName || !o.recId || o.partNo === o.stockName) return;
+    const r = store.records.find(x=> x.id===o.recId);
+    if(!r || (r.partNo||'').trim() !== o.stockName) return;
+    r.partNo = o.partNo; r.partName = o.partName || partNameOf(o.partNo) || '';
+    out.push(`${r.machineId}：${o.stockName} → ${o.partNo}`);
+  });
+  return out;
+}
 function planCommitEdit(){
   planEdit = false;
   planDraftDel.forEach(id=> delDoc('orders', id)); planDraftDel.clear();
+  const ren = syncStockRecNames();
   save();                                  // ここで変更をまとめて全端末へ送る
   renderPlan(); refreshActiveViews();
-  toast('予定を確定しました。全端末に反映されます','success');
+  toast('予定を確定しました。全端末に反映されます' + (ren.length ? '（作業中の記録の品番も変えました　' + ren.join('、') + '）' : ''),'success');
 }
 async function planCancelEdit(){
   const ok = await confirmDialog('編集を取り消す', '確定していない変更をすべて元に戻します。よろしいですか？', '取り消す', true);
@@ -7059,7 +7072,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.92';
+const APP_VERSION = '2026-06-28.93';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
