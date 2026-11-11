@@ -917,6 +917,13 @@
   .os-stock-info{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;font-size:13px;font-weight:700;color:var(--ink2);margin:-2px 0 6px;}
   .os-stock-info b{font-family:var(--mono);color:#7a5600;font-size:15px;}
   .os-stock-info input{width:96px;padding:6px 8px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--mono);font-weight:800;font-size:14px;}
+  .os-use{background:#fffbe6;border:1.5px solid #ecd27a;border-radius:10px;padding:8px 10px;margin:2px 0 6px;}
+  .os-use .h{font-size:12.5px;font-weight:800;color:#7a5600;margin-bottom:6px;}
+  .os-use .row{display:flex;gap:8px;}
+  .os-use select{flex:1.4;min-width:0;padding:8px;border:1.5px solid var(--line);border-radius:8px;font-weight:700;font-size:13.5px;background:#fff;}
+  .os-use input{flex:1;min-width:0;padding:8px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--mono);font-weight:800;font-size:14px;}
+  .os-use .r{font-size:12.5px;font-weight:700;color:var(--ink2);margin-top:6px;}
+  #orderSheet.stock-mode .os-use{display:none;}
   .os-kind-note{font-size:12px;color:var(--ink3);font-weight:600;margin:0 0 6px;line-height:1.5;}
   .oc-alt{font-size:12px;font-weight:700;color:var(--blue);}
   .oc-btns{display:flex;gap:8px;margin-top:2px;}
@@ -1386,6 +1393,14 @@
       <div class="of2">
         <label><span id="osQtyLab">数量（個）</span><input type="number" id="osQty" class="of-in mono" inputmode="numeric" placeholder="例 10000" oninput="osRefresh()"></label>
         <label id="osDueLab">納期<input type="date" id="osDue" class="of-in mono" oninput="osRefresh()"></label>
+      </div>
+      <div class="os-use" id="osUseBox" hidden>
+        <div class="h">🟨 在庫から使う（使う分は作らずに、残りだけ作ります）</div>
+        <div class="row">
+          <select id="osUseName" onchange="osUseChanged()"></select>
+          <input type="number" id="osUseQty" inputmode="numeric" min="0" placeholder="使う数（個）" oninput="osRefresh()">
+        </div>
+        <div class="r" id="osUseInfo"></div>
       </div>
       <div class="of2" id="osSched" hidden>
         <label>機械<select id="osMach" class="of-in" onchange="osRefresh()"></select></label>
@@ -5699,10 +5714,15 @@ function planSpeed(machineId, partNo, o){
   return { ok:false, full, n, basis:'速さ不明' };
 }
 // 目標時間（分）・見込み日数（いつもの1日の稼働で）・止まらなければの日数
+// 作る数（受注で在庫から使う分は作らない）
+function usedStockQty(o){ return (o && o.useStock && o.useStock.qty > 0) ? o.useStock.qty : 0; }
+function planQty(o){ return Math.max(0, (o.qty||0) - usedStockQty(o)); }
+function qtyLabel(o){ const u = usedStockQty(o); return planQty(o).toLocaleString() + '個' + (u ? `（在庫から${u.toLocaleString()}）` : ''); }
 function orderCalc(o, machineId){
   const sp = planSpeed(machineId, o.partNo, o);
-  if(!sp.ok || !(o.qty > 0)) return { ok:false, sp };
-  const min = o.qty / sp.rate;
+  const q = planQty(o);
+  if(!sp.ok || !(q > 0)) return { ok:false, sp };
+  const min = q / sp.rate;
   return { ok:true, sp, min, need:min/sp.perDay, fast:min/sp.full };
 }
 // 機械の予定を並べる（開始日順。重なる分は前の予定の後ろへ押し出す）。override＝ドラッグ中の仮の位置
@@ -5922,13 +5942,13 @@ function planBarHtml(x, todayN){
   const l = Math.max(0, x.s.d + x.s.f - planFirst), r = Math.min(planN, x.e.d + x.e.f - planFirst);
   if(r <= 0 || l >= planN || r <= l) return '';
   const o = x.o, cls = (o.needsInput ? 'tbd' : isStock(o) ? 'stock' : !x.c.ok ? 'unk' : x.late ? 'late' : 'ok') + (o.startedAt ? ' running' : '');
-  const tip = (o.needsInput ? '【残りの数量・納期が未入力（仮に1日分で表示）】\n' : '') + (isStock(o) ? '【在庫（受注が入ったら、予定の編集でバーを押して「受注」に変えられます）】\n' : '') + (x.over ? '【見込みを過ぎて作業中】\n' : '') + `${o.partNo}　${o.qty.toLocaleString()}個\n${numMDW(x.s.d)} 〜 ${numMDW(x.last)}\n${dueLabel(o)}${x.late?'（遅れる）':''}\n` +
+  const tip = (o.needsInput ? '【残りの数量・納期が未入力（仮に1日分で表示）】\n' : '') + (isStock(o) ? '【在庫（受注が入ったら、予定の編集でバーを押して「受注」に変えられます）】\n' : '') + (x.over ? '【見込みを過ぎて作業中】\n' : '') + `${o.partNo}　${qtyLabel(o)}\n${numMDW(x.s.d)} 〜 ${numMDW(x.last)}\n${dueLabel(o)}${x.late?'（遅れる）':''}\n` +
     (x.c.ok ? `見込み${planFmtDays(x.c.need)}日（${x.c.sp.basis}）` : '速さ不明（1日で仮置き）');
   const drag = (canDrag && planEdit) ? ` draggable="true" ondragstart="planDragStart(event,'${o.id}','bar')" ondragend="planDragEnd()"` : '';
   return `<div class="g-bar ${cls}${x.last < todayN ? ' past' : ''}${planEdit?'':' locked'}" style="left:${l/planN*100}%;width:${(r-l)/planN*100}%" title="${esc(tip)}" onclick="${planEdit ? `openOrderSheet('${o.id}')` : 'planNeedEdit()'}"${drag}>` +
     `<b>${o.startedAt?'▶ ':''}${esc(o.partNo)}</b>` +
     (o.needsInput ? '<span>数量・納期を入力</span>'
-      : `<span>${o.qty.toLocaleString()}個</span><small>${x.late?'⚠遅れ ':''}${isStock(o) ? '在庫' : '納期' + numMD(dayNum(o.due))}</small>`) + '</div>';
+      : `<span>${qtyLabel(o)}</span><small>${x.late?'⚠遅れ ':''}${isStock(o) ? '在庫' : '納期' + numMD(dayNum(o.due))}</small>`) + '</div>';
 }
 function renderPlanPool(){
   const el = $('#planPool'); if(!el) return;
@@ -5975,7 +5995,7 @@ function planCardHtml(o, fit, machineId){
   }
   const body = c.ok
     ? `<div class="oc-m">
-        <div><span>目標時間</span><b>約${planFmtHours(c.min)}</b><small>${o.qty.toLocaleString()}個 ÷ ${c.sp.rate.toFixed(2)}個/分</small></div>
+        <div><span>目標時間</span><b>約${planFmtHours(c.min)}</b><small>${planQty(o).toLocaleString()}個 ÷ ${c.sp.rate.toFixed(2)}個/分</small></div>
         <div><span>必要日数</span><b>見込み${planFmtDays(c.need)}日</b><small>止まらなければ${planFmtDays(c.fast)}日</small></div>
       </div>
       ${fit.latest ? `<div class="oc-dl">開始期限 <b>${numMDW(fit.latest.d)}</b> まで</div>` : ''}`
@@ -5985,7 +6005,7 @@ function planCardHtml(o, fit, machineId){
   return `<div class="oc st-${fit.st}"${drag}>
     <div class="oc-top">${planEdit ? bulkCk('pool', o.id) : ''}<span class="oc-part">${esc(o.partNo)}</span><span class="oc-basis">${c.ok ? esc(c.sp.basis) : ''}</span></div>
     ${pname ? `<div class="oc-name">${esc(pname)}</div>` : ''}
-    <div class="oc-sub">${o.qty.toLocaleString()}${esc(o.unit||'個')}　${isStock(o) ? '<b>在庫</b>' : `納期 <b>${numMDW(dayNum(o.due))}</b>`}</div>
+    <div class="oc-sub">${usedStockQty(o) ? qtyLabel(o) : o.qty.toLocaleString() + esc(o.unit||'個')}　${isStock(o) ? '<b>在庫</b>' : `納期 <b>${numMDW(dayNum(o.due))}</b>`}</div>
     ${o.kakouKey ? `<div class="oc-kakou">📄 指図 ${esc(o.kakouKey)}${o.memo ? '・' + esc(o.memo) : ''}</div>` : ''}
     ${body}
     <span class="opill ${fit.st}">${planStLabel(fit)}</span>${alt}
@@ -6605,7 +6625,7 @@ function planNextCard(list){
   const rest = list.slice(1);
   const restHtml = rest.length ? `<div class="np-rest"><div class="np-rest-h">このあとの予定（順番を入れ替えられます）</div>${
     rest.map((x,i)=>`<div class="np-item">
-      <div class="np-row"><span class="n">${i+2}</span><b>${esc(x.o.partNo)}</b><span class="q">${x.o.qty.toLocaleString()}個${isStock(x.o) ? '・在庫' : ''}</span><span class="d">${numMD(x.s.d)}〜${numMD(x.last)}</span>${x.late?'<span class="lt">⚠遅れ</span>':''}</div>
+      <div class="np-row"><span class="n">${i+2}</span><b>${esc(x.o.partNo)}</b><span class="q">${qtyLabel(x.o)}${isStock(x.o) ? '・在庫' : ''}</span><span class="d">${numMD(x.s.d)}〜${numMD(x.last)}</span>${x.late?'<span class="lt">⚠遅れ</span>':''}</div>
       <div class="np-ops">
         <button class="np-mv" onclick="planMoveOrder('${x.o.id}',-1)">▲ 上へ</button>
         <button class="np-mv"${i===rest.length-1?' disabled':''} onclick="planMoveOrder('${x.o.id}',1)">▼ 下へ</button>
@@ -6616,7 +6636,7 @@ function planNextCard(list){
   return `<div class="next-plan">
     <div class="np-h">📅 次の予定${demoChip()}</div>
     <div class="np-part">${esc(o.partNo)}</div>
-    <div class="np-sub">${o.qty.toLocaleString()}個 ・ ${isStock(o) ? '<b>在庫</b>' : `納期 <b>${numMDW(dayNum(o.due))}</b>`}<br>予定 ${numMDW(nx.s.d)}〜${numMDW(nx.last)}${nx.c.ok ? `（見込み${planFmtDays(nx.c.need)}日）` : ''}${nx.late ? ' <span class="np-late">納期に遅れる見込み</span>' : ''}</div>
+    <div class="np-sub">${qtyLabel(o)} ・ ${isStock(o) ? '<b>在庫</b>' : `納期 <b>${numMDW(dayNum(o.due))}</b>`}<br>予定 ${numMDW(nx.s.d)}〜${numMDW(nx.last)}${nx.c.ok ? `（見込み${planFmtDays(nx.c.need)}日）` : ''}${nx.late ? ' <span class="np-late">納期に遅れる見込み</span>' : ''}</div>
     <button class="btn-big btn-start" onclick="startFromOrder('${o.id}')"><span class="ic">▶</span>この予定で開始</button>
     ${early ? '<div class="np-note">予定より早く始めると、予定表が前にずれます</div>' : ''}
     ${restHtml}
@@ -6839,7 +6859,7 @@ function openOrderSheet(id){
   }
   $('#osMore').hidden = !o;
   $('#osToPoolBtn').hidden = !sched;
-  osRenderStockNames(); osRenderStockInfo();
+  osRenderStockNames(); osRenderStockInfo(); osRenderUse(o);
   $('#orderSheet').classList.add('active');
   osRefresh();
 }
@@ -6943,10 +6963,12 @@ function stockCount(name){
     else if(o.startedAt) running++;
     else planned++;
   });
+  let used = 0;   // 受注で在庫から使った分（その注文を消すと戻る）
+  (store.orders||[]).forEach(o=>{ if(!isStock(o) && o.useStock && o.useStock.name === name) used += usedStockQty(o); });
   const it = stockItem(name);
-  const now = made + (it.adj || 0);
+  const now = made - used + (it.adj || 0);
   const max = it.max > 0 ? it.max : null;
-  return { made, now, max, running, planned, over: max != null && now > max };
+  return { made, used, now, max, running, planned, over: max != null && now > max };
 }
 function stockNowText(name){
   const c = stockCount(name);
@@ -6965,7 +6987,7 @@ function setStockMax(name, v){
 async function fixStockCount(name){
   const c = stockCount(name);
   const a = await askWithInput('在庫の数を直す',
-    `「${name}」の今の在庫は ${c.now.toLocaleString()}個 です（作った数の合計から）。\n受注に使った・数え直した時は、今ある数を入れてください。`,
+    `「${name}」の今の在庫は ${c.now.toLocaleString()}個 です（作った数から、受注に使った数を引いたもの）。\n数え直して違っていた時は、今ある数を入れてください。`,
     '直す', 'キャンセル', `<input type="number" id="cfStock" inputmode="numeric" min="0" value="${c.now}" style="flex:1">`);
   if(a.v !== 'ok') return;
   const n = parseInt(a.val);
@@ -6982,7 +7004,7 @@ function renderPlanStock(){
   const list = stockNameList().filter(x=> isStock(x.o) || stockCount(x.name).made || stockItem(x.name).max || stockItem(x.name).adj);
   wrap.hidden = !list.length;
   if(!list.length) return;
-  $('#planStockSub').textContent = `${list.length}件・在庫のまま作り終えた個数の合計（途中で受注に切り替えた分は入りません）`;
+  $('#planStockSub').textContent = `${list.length}件・在庫のまま作り終えた個数から、受注で使った数を引いたもの（途中で受注に切り替えた分は入りません）`;
   $('#planStock').innerHTML = list.map(x=>{
     const c = stockCount(x.name), nm = esc(x.name);
     return `<div class="stk">
@@ -6990,7 +7012,7 @@ function renderPlanStock(){
       <span class="now">${c.now.toLocaleString()}<small>個</small></span>
       ${c.over ? `<span class="over">⚠ 最大を ${(c.now - c.max).toLocaleString()}個 超えています</span>` : ''}
       <label class="mx">最大在庫<input type="number" inputmode="numeric" min="0" value="${c.max || ''}" placeholder="なし" data-n="${nm}" onchange="setStockMax(this.dataset.n, this.value)">個</label>
-      <span class="sub">${[c.running ? '作業中 ' + c.running + '件' : '', c.planned ? '予定 ' + c.planned + '件' : ''].filter(Boolean).join('・')}</span>
+      <span class="sub">${['作った ' + c.made.toLocaleString() + '個', c.used ? '受注に使った ' + c.used.toLocaleString() + '個' : '', c.running ? '作業中 ' + c.running + '件' : '', c.planned ? '予定 ' + c.planned + '件' : ''].filter(Boolean).join('・')}</span>
       <button type="button" data-n="${nm}" onclick="fixStockCount(this.dataset.n)">数を直す</button>
     </div>`;
   }).join('');
@@ -7003,6 +7025,30 @@ function osRenderStockInfo(){
   const c = stockCount(name);
   el.innerHTML = `<span>今の在庫 <b>${c.now.toLocaleString()}</b> 個</span>` +
     `<label>最大在庫 <input type="number" id="osStockMax" inputmode="numeric" min="0" value="${c.max || ''}" placeholder="なし" oninput="osRefresh()"> 個</label>`;
+}
+// 受注の画面の「在庫から使う」
+function osRenderUse(o){
+  const box = $('#osUseBox'); if(!box) return;
+  const names = stockNameList().filter(x=> isStock(x.o) || stockCount(x.name).now > 0 || (o && o.useStock && o.useStock.name === x.name));
+  box.hidden = !names.length;
+  const cur = o && o.useStock ? o.useStock.name : '';
+  $('#osUseName').innerHTML = '<option value="">（在庫は使わない）</option>' + names.map(x=>{
+    const c = stockCount(x.name), mine = (o && o.useStock && o.useStock.name === x.name) ? usedStockQty(o) : 0;
+    return `<option value="${esc(x.name)}">${esc(x.name)}（あと ${(c.now + mine).toLocaleString()}個）</option>`;
+  }).join('');
+  $('#osUseName').value = names.some(x=> x.name===cur) ? cur : '';
+  $('#osUseQty').value = o && o.useStock && o.useStock.qty ? o.useStock.qty : '';
+}
+function osUseChanged(){ if(!$('#osUseName').value) $('#osUseQty').value = ''; osRefresh(); if($('#osUseName').value) setTimeout(()=>{ try{ $('#osUseQty').focus(); }catch(e){} }, 50); }
+// その在庫から、この注文でいくつまで使えるか（編集中の注文がもう使っている分は戻して数える）
+function osUseAvail(name){
+  const o0 = osId ? store.orders.find(x=> x.id===osId) : null;
+  return stockCount(name).now + ((o0 && o0.useStock && o0.useStock.name === name) ? usedStockQty(o0) : 0);
+}
+function osUseVal(){
+  const name = (!osStock && $('#osUseName')) ? $('#osUseName').value : '';
+  const qty = name ? (parseInt($('#osUseQty').value) || 0) : 0;
+  return name && qty > 0 ? { name, qty } : null;
 }
 // 注文の画面で今の「品番」（在庫は名前）
 function osPartVal(){ return (osStock ? $('#osStockName').value : $('#osPart').value).trim(); }
@@ -7057,8 +7103,19 @@ function osRefresh(){
     if(!osStock || th){ $('#osSpm').value = th ? th.spm : ''; $('#osSpp').value = th ? th.spp : ''; }
   }
   const tmp = { id:osId||'_new', partNo:part, qty:parseInt($('#osQty').value)||0, due: osStock ? '' : $('#osDue').value, stock: osStock,
-    spm:parseInt($('#osSpm').value)||null, spp:parseInt($('#osSpp').value)||null, coilId:$('#osCoil').value||null };
+    spm:parseInt($('#osSpm').value)||null, spp:parseInt($('#osSpp').value)||null, coilId:$('#osCoil').value||null, useStock: osUseVal() };
   const calc = $('#osCalc');
+  const ui = $('#osUseInfo');
+  if(ui){
+    const u = tmp.useStock, nm = !osStock && $('#osUseName') ? $('#osUseName').value : '';
+    if(!nm) ui.innerHTML = '';
+    else {
+      const av = osUseAvail(nm);
+      ui.innerHTML = `この在庫は あと <b>${av.toLocaleString()}個</b>` +
+        (u ? (u.qty > av ? `　<span class="bad">在庫が ${(u.qty - av).toLocaleString()}個 足りません</span>`
+          : tmp.qty > 0 ? (u.qty >= tmp.qty ? '　<b>全部在庫でまかなえます（作らない）</b>' : `　→ 作る数 <b>${(tmp.qty - u.qty).toLocaleString()}個</b>（使ったあと在庫 ${(av - u.qty).toLocaleString()}個）`) : '') : '');
+    }
+  }
   if(!part || !mId){
     calc.innerHTML = osStock ? '名前・回転数・作る数を入れると、目標時間を計算します。' : '品番・数量・納期を入れると、目標時間と「いつまでに始めればいいか」を計算します。';
     return;
@@ -7088,11 +7145,23 @@ function osRefresh(){
   }
   calc.innerHTML = h;
 }
-function saveOrder(){
+async function saveOrder(){
   const part = osPartVal(), qty = parseInt($('#osQty').value), due = $('#osDue').value;
   if(!part){ toast(osStock ? '在庫の名前を入れてください' : osStockWas ? '受注の品番を入れてください' : '品番を入れてください','error'); return; }
   if(!(qty > 0)){ toast('数量を入れてください','error'); return; }
   if(!osStock && !due){ toast(osStockWas ? '受注に変えるには納期を入れてください' : '納期を入れてください','error'); return; }
+  const use = osUseVal();
+  if(use){
+    const av = osUseAvail(use.name);
+    if(use.qty > av){ toast(`「${use.name}」の在庫は あと ${av.toLocaleString()}個 です`,'error'); return; }
+    if(use.qty > qty){ toast('在庫から使う数が、数量より多いです','error'); return; }
+  } else if(!osStock && $('#osUseName') && $('#osUseName').value){ toast('在庫から使う数を入れてください（使わない時は「在庫は使わない」に）','error'); return; }
+  let allStock = false;
+  if(use && use.qty === qty){
+    const ok = await confirmDialog('全部在庫でまかなえます', `数量 ${qty.toLocaleString()}個 を全部「${use.name}」の在庫から使います。\n作る必要が無いので、この注文は完了にしますか？`, '完了にする');
+    if(!ok) return;
+    allStock = true;
+  }
   const isEdit = !!osId;
   let o = isEdit ? store.orders.find(x=>x.id===osId) : null;
   if(!o){
@@ -7102,6 +7171,8 @@ function saveOrder(){
   const toOrder = isEdit && isStock(o) && !osStock;   // 在庫 → 受注
   o.partNo = part; o.qty = qty; o.due = osStock ? '' : due; o.coilId = $('#osCoil').value || null;
   o.stock = osStock;
+  if(use) o.useStock = use; else delete o.useStock;
+  if(allStock){ o.done = true; o.doneAt = nowDate().toISOString(); o.doneQty = 0; }
   if(osStock){
     o.stockName = part; o.partName = '';   // 在庫の名前は品番マスターに入れない
     const mxEl = $('#osStockMax');
@@ -7121,7 +7192,8 @@ function saveOrder(){
   }
   save(); closeOrderSheet(); renderPlan();
   if(moved) planToastPlaced(o);
-  else toast(toOrder ? '在庫を受注に変えました（緑のバー）' : isEdit ? '注文を更新しました' : osStock ? '在庫をプールに入れました' : '注文をプールに入れました', 'success');
+  else if(allStock) toast(`全部在庫から使って完了にしました（${use.name} あと ${stockCount(use.name).now.toLocaleString()}個）`, 'success');
+  else toast(use ? `保存しました。在庫から ${use.qty.toLocaleString()}個 使います（${use.name} あと ${stockCount(use.name).now.toLocaleString()}個）` : toOrder ? '在庫を受注に変えました（緑のバー）' : isEdit ? '注文を更新しました' : osStock ? '在庫をプールに入れました' : '注文をプールに入れました', 'success');
 }
 function osToPool(){ const id = osId; closeOrderSheet(); planToPool(id); }
 async function osDone(){
@@ -7196,7 +7268,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.94';
+const APP_VERSION = '2026-06-28.95';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
