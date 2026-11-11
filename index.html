@@ -901,8 +901,9 @@
   .os-hist-m{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 8px;}
   .os-hist-m button{padding:5px 12px;border-radius:999px;border:1.5px solid var(--line);background:var(--surface);font-weight:800;font-size:12.5px;color:var(--ink2);cursor:pointer;font-family:var(--mono);}
   .os-hist-m button.on{background:var(--ink);border-color:var(--ink);color:#fff;}
-  /* 在庫は「過去の品番・コイル・作る数」だけ（読み取り・品名・回転数は隠す） */
-  #orderSheet.stock-mode .os-scan .btn-scan,#orderSheet.stock-mode .os-scan .btn-scan-photo,#orderSheet.stock-mode .os-scan .rpm-row,#orderSheet.stock-mode #osNameLab,#orderSheet.stock-mode #osPartLab{display:none;}
+  /* 在庫は「在庫の名前・コイル・回転数・作る数」だけ */
+  #orderSheet.stock-mode .os-scan .btn-scan,#orderSheet.stock-mode .os-scan .btn-scan-photo,#orderSheet.stock-mode #osHistRow,#orderSheet.stock-mode #osHistM,#orderSheet.stock-mode #osNameLab,#orderSheet.stock-mode #osPartLab{display:none;}
+  #osStockBox .os-hist-m button{font-family:inherit;}
   .os-kind-note{font-size:12px;color:var(--ink3);font-weight:600;margin:0 0 6px;line-height:1.5;}
   .oc-alt{font-size:12px;font-weight:700;color:var(--blue);}
   .oc-btns{display:flex;gap:8px;margin-top:2px;}
@@ -1338,6 +1339,10 @@
     <div class="os-kind-note" id="osKindNote"></div>
     <div class="of">
       <label id="osPartLab">品番<input type="text" id="osPart" class="scanned-input" autocomplete="off" inputmode="text" placeholder="バーコード読取／品番を手入力" oninput="osRefresh()"></label>
+      <div id="osStockBox" hidden>
+        <label>在庫の名前<input type="text" id="osStockName" class="of-in" autocomplete="off" placeholder="例 棚柱1820 在庫" oninput="osStockNameInput()"></label>
+        <div class="os-hist-m" id="osStockNames"></div>
+      </div>
       <label id="osNameLab">品名（任意）<input type="text" id="osName" class="of-in" autocomplete="off" placeholder="空でもOK（例 SUS430棚柱）" oninput="osNameInput()"></label>
       <!-- 日報入力の「バーコードを読み取る」と同じ入力（デモ中のパソコンはここで入れる） -->
       <div class="os-scan">
@@ -1346,7 +1351,7 @@
           <span class="cam">🖼️</span>写真で読み取る（うまく読めない時）
           <input type="file" accept="image/*" capture="environment" id="osPhoto" onchange="osDecodePhoto(event)" style="display:none">
         </label>
-        <div class="coil-row">
+        <div class="coil-row" id="osHistRow">
           <span class="coil-lab" id="osHistLab">📄 過去の品番</span>
           <select id="osHistory" class="coil-select" onchange="osPickHistory()"></select>
         </div>
@@ -3711,8 +3716,10 @@ async function askWithInput(title, msg, okLabel, cancelLabel, inputHtml, altLabe
   const v = await p;
   const inp = box && box.querySelector('input');
   const val = inp ? inp.value : '';
+  const vals = {};
+  if(box) box.querySelectorAll('input').forEach(i=>{ if(i.id) vals[i.id] = i.value; });
   if(box) box.remove();
-  return { v, val };
+  return { v, val, vals };
 }
 function addMachineShutdown(mid, from, to, label){
   store.shutdowns = store.shutdowns || [];
@@ -3783,27 +3790,32 @@ async function askNextAfterOrder(r){
       if(to) addMachineShutdown(mid, dateKey(tomorrowDate()), to, '受注のあと');
       return;
     }
-    // 在庫分：同じ品番・コイルで、作る数だけ聞いて予定に入れる
-    const coilId = ord.coilId || r.coilId || null;
-    const coil = (store.coils||[]).find(x=> x.id===coilId);
-    let qty = 0;
+    // 在庫分：名前と作る数を聞いて予定に入れる（前に使った名前ならコイル・回転数は前回の内容。無ければ終わった受注のもの）
+    const names = stockNameList();
+    const lastHere = names.find(x=> x.o.machineId===mid);
+    let name = lastHere ? lastHere.name : '', qty = 0;
     for(;;){
       const a = await askWithInput('在庫分を作る',
-        `「${ord.partNo}」の在庫分を何個作りますか？${coil ? '\nコイル：' + coil.name : ''}\n入れると ${mid} の次の予定（黄色）になり、「この予定で開始」で始められます。`,
-        '予定に入れる', 'やめる', `<input type="number" id="cfQty" inputmode="numeric" min="1" placeholder="作る数（個）" style="flex:1">`);
+        `在庫の名前と、作る数を入れてください。\n前に使った名前なら、コイルと回転数は前回と同じにします。\n入れると ${mid} の次の予定（黄色）になり、「この予定で開始」で始められます。`,
+        '予定に入れる', 'やめる',
+        `<div style="display:flex;flex-direction:column;gap:8px;width:100%"><input type="text" id="cfName" list="cfNameList" placeholder="在庫の名前（例 棚柱1820 在庫）" value="${esc(name)}">` +
+        `<datalist id="cfNameList">${names.map(x=> `<option value="${esc(x.name)}">`).join('')}</datalist>` +
+        `<input type="number" id="cfQty" inputmode="numeric" min="1" placeholder="作る数（個）"></div>`);
       if(a.v !== 'ok') return;
-      qty = parseInt(a.val);
-      if(qty > 0) break;
-      toast('作る数を入れてください','error');
+      name = (a.vals.cfName || '').trim(); qty = parseInt(a.vals.cfQty);
+      if(name && qty > 0) break;
+      toast(!name ? '在庫の名前を入れてください' : '作る数を入れてください','error');
     }
+    const mem = (names.find(x=> x.name===name) || {}).o;
+    const coilId = (mem && mem.coilId) || ord.coilId || r.coilId || null;
     const now = planTodayPos(mid);
-    const o = { id:'o'+nowMs().toString(36)+Math.random().toString(36).slice(2,6), partNo:ord.partNo, partName: ord.partName || partNameOf(ord.partNo) || '',
-      qty, due:'', stock:true, coilId, spm: ord.spm || null, spp: ord.spp || null,
+    const o = { id:'o'+nowMs().toString(36)+Math.random().toString(36).slice(2,6), partNo:name, stockName:name, partName:'',
+      qty, due:'', stock:true, coilId, spm: (mem ? mem.spm : ord.spm) || null, spp: (mem ? mem.spp : ord.spp) || null,
       machineId:mid, start:numKey(now.d), startFrac:now.f, seq:nowMs(), done:false, createdAt:nowDate().toISOString() };
     store.orders.push(o);
     planWorkMemo = {};
     save(); refreshActiveViews();
-    toast(`在庫分（${ord.partNo}・${qty.toLocaleString()}個）を ${mid} の次の予定に入れました`,'success');
+    toast(`在庫分（${name}・${qty.toLocaleString()}個）を ${mid} の次の予定に入れました`,'success');
   }catch(e){ console.warn('askNextAfterOrder', e); }
 }
 
@@ -5789,7 +5801,7 @@ const PLAN_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function validOrder(o){ return !!(o && o.id && typeof o.partNo==='string' && o.partNo && o.qty > 0 && (PLAN_DATE_RE.test(o.due||'') || (o.stock===true && !o.due))); }
 // 在庫の注文（受注ではない。納期なし・黄色のバー）
 function isStock(o){ return !!(o && o.stock===true); }
-function stockName(o){ const n = o.partName || partNameOf(o.partNo); return o.partNo + (n ? '（' + n + '）' : ''); }
+function stockName(o){ if(o.stockName) return o.stockName; const n = o.partName || partNameOf(o.partNo); return o.partNo + (n ? '（' + n + '）' : ''); }
 // 「納期 11/12(木)」／在庫は「在庫」
 function dueLabel(o, short){ return isStock(o) ? '在庫' : '納期 ' + (short ? numMD(dayNum(o.due)) : numMDW(dayNum(o.due))); }
 function isScheduled(o){ return !!(o.start && PLAN_DATE_RE.test(o.start) && store.machines.some(m=>m.id===o.machineId)); }
@@ -6764,8 +6776,9 @@ function openOrderSheet(id){
   // 過去の品番（作業の記録＋注文・在庫。新しい順）。機械で絞れる。選ぶとコイル・回転数も呼び出す
   osHistM = (o && o.machineId) || planMachine || '';
   osRenderHistory(o ? o.partNo : '');
-  $('#osPart').value = o ? o.partNo : '';
-  $('#osName').value = o ? (o.partName || partNameOf(o.partNo)) : '';
+  $('#osPart').value = o && !isStock(o) ? o.partNo : '';   // 在庫の名前は品番ではないので、受注に変える時は品番を入れてもらう
+  $('#osStockName').value = o ? stockNameOf(o) : '';
+  $('#osName').value = o && !isStock(o) ? (o.partName || partNameOf(o.partNo)) : '';
   osNameTouched = !!(o && o.partName);
   $('#osQty').value = o && !o.needsInput ? o.qty : '';   // 取り込んだ作業は仮の値を見せずに空欄で
   $('#osDue').value = o && !o.needsInput ? o.due : '';
@@ -6783,6 +6796,7 @@ function openOrderSheet(id){
   }
   $('#osMore').hidden = !o;
   $('#osToPoolBtn').hidden = !sched;
+  osRenderStockNames();
   $('#orderSheet').classList.add('active');
   osRefresh();
 }
@@ -6800,6 +6814,8 @@ function osHistoryMap(){
   store.records.forEach(r=> add(r.partNo, new Date(r.startTime).getTime() || 0, r.machineId, false));
   (store.orders||[]).forEach(o=> add(o.partNo, new Date(o.startedAt || o.createdAt || 0).getTime() || 0, o.machineId, isStock(o)));   // 在庫・終わった注文も残す
   [...seen.keys()].forEach(p=>{ if(partHidden(p)) seen.delete(p); });   // 削除した品番は出さない
+  const sn = new Set((store.orders||[]).map(o=> (o.stockName||'').trim()).filter(Boolean));   // 在庫の名前は品番ではないので出さない
+  sn.forEach(n=> seen.delete(n));
   return seen;
 }
 function osRenderHistory(keep){
@@ -6818,18 +6834,60 @@ function osRenderHistory(keep){
   const h = $('#osHistory'); h.value = keep && [...h.options].some(x=> x.value===keep) ? keep : '';
 }
 function osSetHistM(id){ osHistM = id; osRenderHistory($('#osPart').value.trim()); }
+// 在庫の名前（自由に付ける）。前に使った名前を選ぶと、コイル・回転数を前回の内容で呼び出す
+function stockNameOf(o){ return o.stockName || (isStock(o) ? o.partNo : ''); }
+function stockNameList(){
+  const m = new Map();   // 名前 -> 一番新しい在庫の注文
+  (store.orders||[]).forEach(o=>{
+    const n = (stockNameOf(o)||'').trim(); if(!n) return;
+    const cur = m.get(n);
+    if(!cur || (o.createdAt||'') > (cur.createdAt||'')) m.set(n, o);
+  });
+  return [...m.entries()].sort((a,b)=> (b[1].createdAt||'') < (a[1].createdAt||'') ? -1 : 1).map(([name, o])=> ({ name, o }));
+}
+function osRenderStockNames(){
+  const cur = $('#osStockName').value.trim();
+  const list = stockNameList().slice(0, 20);
+  $('#osStockNames').innerHTML = list.length
+    ? list.map(x=> `<button type="button" class="${x.name===cur?'on':''}" onclick="osPickStockName(this.dataset.n)" data-n="${esc(x.name)}">${esc(x.name)}</button>`).join('')
+    : '<span class="os-kind-note" style="margin:0">前に使った名前がここに出ます</span>';
+}
+function osApplyStockMemory(name){
+  const x = stockNameList().find(y=> y.name===name); if(!x) return false;
+  const o = x.o;
+  if(o.coilId && store.coils.some(c=> c.id===o.coilId)){ $('#osCoil').value = o.coilId; osCoilTouched = true; }
+  if(o.spm || o.spp){ $('#osSpm').value = o.spm || ''; $('#osSpp').value = o.spp || ''; osSpeedTouched = true; }
+  return true;
+}
+function osPickStockName(name){
+  $('#osStockName').value = name;
+  osApplyStockMemory(name);
+  osRenderStockNames(); osRefresh();
+  const got = [];
+  const c = store.coils.find(x=>x.id===$('#osCoil').value); if(c) got.push('コイル ' + c.name);
+  if($('#osSpm').value) got.push($('#osSpm').value + '回転/分');
+  if($('#osSpp').value) got.push($('#osSpp').value + '回転で1個');
+  toast(got.length ? name + ' ／ ' + got.join('・') + ' を呼び出しました' : name, 'success');
+}
+function osStockNameInput(){
+  const n = $('#osStockName').value.trim();
+  osApplyStockMemory(n);   // 前に使った名前と同じになったら呼び出す
+  osRenderStockNames(); osRefresh();
+}
+// 注文の画面で今の「品番」（在庫は名前）
+function osPartVal(){ return (osStock ? $('#osStockName').value : $('#osPart').value).trim(); }
 // 受注（緑）／在庫（黄）の切り替え。在庫は納期なしで、作る数だけ入れる
 let osStock = false, osStockWas = false;
 function osSetKind(stock, quiet){
   osStock = !!stock;
   $('#orderSheet').classList.toggle('stock-mode', osStock);
-  $('#osHistLab').textContent = osStock ? '🟨 何の在庫分' : '📄 過去の品番';
+  $('#osStockBox').hidden = !osStock;
   document.querySelectorAll('#osKind button').forEach(b=> b.classList.toggle('on', b.classList.contains(osStock ? 'k-stock' : 'k-order')));
   $('#osDueLab').hidden = osStock;
   $('#osQtyLab').textContent = osStock ? '在庫で作る数（個）' : '数量（個）';
   $('#osKindNote').innerHTML = osStock
-    ? '在庫：「何の在庫分」を選んで、コイルと作る数を入れるだけです（品番・納期は入れません）。受注が入ったら、このバーを押して「🟩 受注」に切り替え、納期を入れると緑になります。'
-    : (osStockWas ? '<b>在庫 → 受注に切り替えます。</b>納期を入れて保存すると緑のバーになります（作業中ならそのまま続きます）。受注の品番が違う時は品番も直せます。' : '');
+    ? '在庫：名前を付けて、コイル・回転数・作る数を入れます（品番・納期は入れません）。前に使った名前を選ぶと、コイルと回転数が前回の内容で出ます。受注が入ったら、このバーを押して「🟩 受注」に切り替えます。'
+    : (osStockWas ? '<b>在庫 → 受注に切り替えます。</b>受注の品番と納期を入れて保存すると緑のバーになります（作業中ならそのまま続きます）。' : '');
   if(!quiet){ osRefresh(); if(!osStock && !$('#osDue').value) setTimeout(()=>{ try{ $('#osDue').focus(); }catch(e){} }, 50); }
 }
 function osCoilChanged(){ osCoilTouched = true; osRefresh(); }
@@ -6854,25 +6912,28 @@ function osDecodePhoto(ev){ scanTarget = 'order'; decodePhoto(ev); }
 // 入力に合わせて、目標時間・開始期限をその場で計算して見せる
 function osRefresh(){
   planWorkMemo = {};
-  const part = $('#osPart').value.trim();
-  if(!osCoilTouched) $('#osCoil').value = (part && lastCoilOf(part)) || '';   // コイルは品番の履歴から自動
-  if(!osNameTouched) $('#osName').value = part ? partNameOf(part) : '';       // 品名は登録済みのものを自動
+  const part = osPartVal();
+  if(!osCoilTouched && part){   // コイルは品番の履歴から自動（品番が空の間は、先に選んである材料をそのまま）
+    const lc = lastCoilOf(part);
+    if(!osStock || lc) $('#osCoil').value = lc || '';
+  }
+  if(!osNameTouched && !osStock) $('#osName').value = part ? partNameOf(part) : '';       // 品名は登録済みのものを自動
   const o0 = osId ? store.orders.find(x=>x.id===osId) : null;
   const sched = !$('#osSched').hidden;
   const mId = sched ? $('#osMach').value : planMachine;
   if(!osSpeedTouched){   // 回転数も品番の履歴から自動（手で直したらそのまま）
     const th = part ? planTheory(mId || '', part, null) : null;
-    $('#osSpm').value = th ? th.spm : ''; $('#osSpp').value = th ? th.spp : '';
+    if(!osStock || th){ $('#osSpm').value = th ? th.spm : ''; $('#osSpp').value = th ? th.spp : ''; }
   }
   const tmp = { id:osId||'_new', partNo:part, qty:parseInt($('#osQty').value)||0, due: osStock ? '' : $('#osDue').value, stock: osStock,
     spm:parseInt($('#osSpm').value)||null, spp:parseInt($('#osSpp').value)||null, coilId:$('#osCoil').value||null };
   const calc = $('#osCalc');
   if(!part || !mId){
-    calc.innerHTML = '品番・数量・納期を入れると、目標時間と「いつまでに始めればいいか」を計算します。';
+    calc.innerHTML = osStock ? '名前・回転数・作る数を入れると、目標時間を計算します。' : '品番・数量・納期を入れると、目標時間と「いつまでに始めればいいか」を計算します。';
     return;
   }
   const sp = planSpeed(mId, part, tmp);
-  if(!sp.ok){ calc.innerHTML = '⚠ この品番は速さが分かりません。<b>回転数/分</b> と <b>何回転で1個</b> を入れると計算できます。'; return; }
+  if(!sp.ok){ calc.innerHTML = `⚠ この${osStock ? '在庫' : '品番'}は速さが分かりません。<b>回転数/分</b> と <b>何回転で1個</b> を入れると計算できます。`; return; }
   let h = `${esc(mId)} で <b>${sp.rate.toFixed(2)}個/分</b>（${esc(sp.basis)}）`;
   if(tmp.qty > 0){
     const c = orderCalc(tmp, mId);
@@ -6893,8 +6954,8 @@ function osRefresh(){
   calc.innerHTML = h;
 }
 function saveOrder(){
-  const part = $('#osPart').value.trim(), qty = parseInt($('#osQty').value), due = $('#osDue').value;
-  if(!part){ toast(osStock ? '何の在庫分かを選んでください' : '品番を入れてください','error'); return; }
+  const part = osPartVal(), qty = parseInt($('#osQty').value), due = $('#osDue').value;
+  if(!part){ toast(osStock ? '在庫の名前を入れてください' : osStockWas ? '受注の品番を入れてください' : '品番を入れてください','error'); return; }
   if(!(qty > 0)){ toast('数量を入れてください','error'); return; }
   if(!osStock && !due){ toast(osStockWas ? '受注に変えるには納期を入れてください' : '納期を入れてください','error'); return; }
   const isEdit = !!osId;
@@ -6906,9 +6967,13 @@ function saveOrder(){
   const toOrder = isEdit && isStock(o) && !osStock;   // 在庫 → 受注
   o.partNo = part; o.qty = qty; o.due = osStock ? '' : due; o.coilId = $('#osCoil').value || null;
   o.stock = osStock;
-  const pname = $('#osName').value.trim();   // 品名は任意（空でも保存できる）
-  o.partName = pname;
-  if(pname && pname !== partNameOf(part)) setPartName(part, pname);   // 入れた時だけ品番の品名として保存（消すのは設定タブで）
+  if(osStock){
+    o.stockName = part; o.partName = '';   // 在庫の名前は品番マスターに入れない
+  } else {
+    const pname = $('#osName').value.trim();   // 品名は任意（空でも保存できる）
+    o.partName = pname;
+    if(pname && pname !== partNameOf(part)) setPartName(part, pname);   // 入れた時だけ品番の品名として保存（消すのは設定タブで）
+  }
   o.needsInput = false;
   const spm = parseInt($('#osSpm').value), spp = parseInt($('#osSpp').value);
   o.spm = spm > 0 ? spm : null; o.spp = spp > 0 ? spp : null;
@@ -6994,7 +7059,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.91';
+const APP_VERSION = '2026-06-28.92';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
