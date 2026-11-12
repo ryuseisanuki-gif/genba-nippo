@@ -470,6 +470,20 @@
   .rchip:active{transform:scale(.97);}
   .rchip .n{opacity:.7;font-size:11px;margin-left:4px;}
   #recMissingBtn.sel{background:var(--stop);border-color:var(--stop);color:#fff;}
+  /* 個数の入れ忘れ一覧 */
+  .tab .tab-n{display:inline-block;min-width:17px;padding:0 4px;margin-left:3px;border-radius:9px;background:var(--stop);color:#fff;font-size:10.5px;font-weight:900;line-height:17px;font-family:var(--mono);}
+  .tab .tab-n[hidden]{display:none;}
+  .qm-note{font-size:12.5px;color:var(--ink2);font-weight:600;line-height:1.6;background:var(--pause-bg);border:1px solid #ecd7a6;border-radius:10px;padding:9px 12px;margin-bottom:10px;}
+  .qm-row{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--stop);border-radius:10px;padding:10px 11px;margin-bottom:6px;}
+  .qm-top{display:flex;align-items:center;gap:9px;}
+  .qm-top .rr-date{font-family:var(--mono);font-size:13px;font-weight:800;color:var(--ink);flex:0 0 auto;}
+  .qm-top .rr-mach{font-family:var(--mono);font-size:12px;font-weight:800;color:var(--ink);background:var(--surface2);border-radius:6px;padding:2px 6px;flex:0 0 auto;}
+  .qm-top .rr-part{flex:1;min-width:0;font-size:12.5px;color:var(--ink2);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .qm-sub{font-size:11.5px;color:var(--ink3);font-weight:600;margin:4px 0 8px;line-height:1.5;}
+  .qm-act{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+  .qm-act input{width:120px;padding:9px 10px;border:1.5px solid var(--stop);border-radius:8px;font-family:var(--mono);font-size:15px;font-weight:700;}
+  .qm-act .qm-save{padding:9px 14px;border:none;border-radius:8px;background:var(--orange);color:#fff;font-family:var(--sans);font-size:13px;font-weight:800;}
+  .qm-act .qm-ok{margin-left:auto;padding:9px 11px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink2);font-family:var(--sans);font-size:12px;font-weight:700;}
   /* 記録タブ：1行一覧 */
   .rrow{
     display:flex;align-items:center;gap:9px;width:100%;text-align:left;
@@ -978,7 +992,7 @@
 
 <nav class="tabs">
   <button class="tab active" data-tab="input"><span class="ic">📝</span>日報入力</button>
-  <button class="tab" data-tab="records"><span class="ic">📋</span>記録</button>
+  <button class="tab" data-tab="records"><span class="ic">📋</span>記録<span class="tab-n" id="recTabN" hidden></span></button>
   <button class="tab" data-tab="summary"><span class="ic">📊</span>日別集計</button>
   <button class="tab" data-tab="plan"><span class="ic">🗓️</span>予定</button>
   <button class="tab" data-tab="master"><span class="ic">🏷️</span>品番</button>
@@ -1052,7 +1066,7 @@
       <option value="date">日付順（全機械）</option>
       <option value="machine">機械ごと（日付順）</option>
     </select>
-    <button class="rchip" id="recMissingBtn" onclick="toggleRecMissing()">個数未入力のみ</button>
+    <button class="rchip" id="recMissingBtn" onclick="toggleRecMissing()">個数の入れ忘れ</button>
     <button class="btn-out" onclick="exportCSV()">⬇ CSV</button>
     <button class="btn-out" onclick="openXlsxSheet()">📊 月別エクセル</button>
     <button class="btn-out" onclick="exportJSON()">⬇ バックアップ</button>
@@ -3613,7 +3627,7 @@ function refreshHeavyViews(){
   _heavyT = setTimeout(()=>{
     _heavyT = 0;
     if($('#page-summary').classList.contains('active')) renderSummary();
-    if($('#page-records').classList.contains('active')) renderRecords();
+    if($('#page-records').classList.contains('active')) renderRecords(); else updateRecTabBadge();
     if($('#page-plan').classList.contains('active')){   // 他端末で入れた注文・予定も反映
       try{ renderPlan(); }catch(e){ console.warn('renderPlan', e); }   // 予定の不具合で他の画面の更新を止めない
     }
@@ -4108,6 +4122,106 @@ function recRange(){
   }
   return {from:null, to:null};
 }
+/* ===== 個数の入れ忘れ =====
+   その記録が QTY_MISS_MIN 分以上動いていた日なのに、その日の個数が入っていない日を並べる（直近 QTY_MISS_DAYS 日）。
+   ・動いている作業の今日の分は出さない（夕方に入れるため）。終了した作業は今日の分も出す
+   ・土日祝（実績なし）・休止の日は出さない
+   ・「まとめて入れた」を押した日は出さない（設定 qtyOk に 記録id|日付 を覚える） */
+const QTY_MISS_DAYS = 30, QTY_MISS_MIN = 30;
+function recRunMinOnDay(r, day){
+  const rs = new Date(r.startTime).getTime(), re = endRefT(r);
+  const a = Math.max(stdStart(day).getTime(), rs), b = Math.min(stdEnd(day).getTime(), re, nowMs());
+  if(b <= a) return 0;
+  const stops = (r.stops||[]).map(st=> [new Date(st.from).getTime(), st.to ? new Date(st.to).getTime() : re]);
+  let n = 0;
+  for(let t = a; t < b; t += 60000){
+    if(inBreak(day, t)) continue;
+    if(stops.some(([f, e])=> t >= f && t < e)) continue;
+    n++;
+  }
+  return n;
+}
+let _qmCache = { ver:-1, day:'', list:[] };
+function qtyMissList(){
+  const today = dateKey(nowDate());
+  if(_qmCache.ver === dataVer && _qmCache.day === today) return _qmCache.list;
+  const ok = new Set(appSetting().qtyOk || []);
+  const cut = nowDate(); cut.setHours(0,0,0,0); cut.setDate(cut.getDate() - QTY_MISS_DAYS);
+  const out = [];
+  store.records.forEach(r=>{
+    if(!r.startTime) return;
+    const dc = r.dailyCounts || [];
+    if(!dc.length && recordTotalQty(r) > 0) return;          // 古い形で合計だけ入っている記録は入力済みとみなす
+    const have = new Set(dc.map(c=> c.date));
+    const d = new Date(r.startTime); d.setHours(0,0,0,0);
+    if(d < cut) d.setTime(cut.getTime());
+    const endK = dateKey(new Date(Math.min(endRefT(r), nowMs())));
+    for(; dateKey(d) <= endK; d.setDate(d.getDate()+1)){
+      const dk = dateKey(d);
+      if(dk === today && r.status !== 'done') continue;
+      if(have.has(dk) || ok.has(r.id + '|' + dk)) continue;
+      if(offDay(d) || isShutdown(d, r.machineId)) continue;
+      const min = recRunMinOnDay(r, new Date(d));
+      if(min >= QTY_MISS_MIN) out.push({ r, dk, min });
+    }
+  });
+  const order = store.machines.map(m=> m.id);
+  out.sort((x, y)=> x.dk < y.dk ? 1 : x.dk > y.dk ? -1 : order.indexOf(x.r.machineId) - order.indexOf(y.r.machineId));
+  _qmCache = { ver:dataVer, day:today, list:out };
+  return out;
+}
+function updateRecTabBadge(){
+  const el = $('#recTabN'); if(!el) return;
+  let n = 0; try{ n = qtyMissList().length; }catch(e){ console.warn('qtyMissList', e); }
+  el.textContent = n; el.hidden = !n;
+}
+function qmDayLabel(dk){ const d = new Date(dk + 'T00:00:00'); return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`; }
+function renderQtyMiss(list){
+  const note = `<div class="qm-note">動いていたのに、その日の個数が入っていない日です（直近${QTY_MISS_DAYS}日）。<br>個数を入れて「入れる」を押してください。作っていない日は <b>0</b> を入れます。<br>他の日にまとめて入れてある時は「まとめて入れた」を押すと、一覧から消えます（個数は変わりません）。</div>`;
+  if(!list.length) return note + `<div class="rec-empty-note">個数の入れ忘れはありません 👍</div>`;
+  return note + list.map(x=>{
+    const id = esc(x.r.id), dcs = (x.r.dailyCounts||[]).filter(c=> (c.qty||0) > 0);
+    const sub = `動いた時間 ${durLabel(x.min)}（休憩・停止を除く）` + (dcs.length ? `\nこの作業で入っている個数：${dcs.map(c=> c.date.slice(5).replace('-','/') + ' ' + c.qty.toLocaleString() + '個').join('・')}` : '');
+    return `<div class="qm-row">
+      <div class="qm-top"><span class="rr-date">${qmDayLabel(x.dk)}</span><span class="rr-mach">${esc(x.r.machineId)}</span><span class="rr-part">${esc(x.r.partNo||'—')}</span></div>
+      <div class="qm-sub">${esc(sub).replace(/\n/g,'<br>')}</div>
+      <div class="qm-act">
+        <input type="number" inputmode="numeric" min="0" placeholder="個数" onfocus="rememberRecById('qtyday:${id}', '${id}')" onkeydown="if(event.key==='Enter') saveQtyMiss('${id}','${x.dk}', this)">
+        <button class="qm-save" onclick="saveQtyMiss('${id}','${x.dk}', this.previousElementSibling)">入れる</button>
+        <button class="qm-ok" onclick="okQtyMiss('${id}','${x.dk}')">まとめて入れた</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function saveQtyMiss(id, dk, input){
+  const v = String(input && input.value || '').trim();
+  if(!/^\d+$/.test(v)){ toast('個数を入れてください（作っていない日は 0）','error'); if(input) input.focus(); return; }
+  const q = parseInt(v, 10);
+  if(!sheetBase['qtyday:'+id]) rememberRecById('qtyday:'+id, id);
+  const chk = await checkRecConflict('qtyday:'+id, id, (a, c)=> canonJson(a.dailyCounts||[])===canonJson(c.dailyCounts||[]) && canonJson(a.pendingDates||[])===canonJson(c.pendingDates||[]),
+    `${dk.slice(5).replace('-','/')} の個数 ${q.toLocaleString()}個`);
+  delete sheetBase['qtyday:'+id];
+  if(!chk.ok){ renderRecords(); return; }
+  const r = chk.cur;
+  r.dailyCounts = (r.dailyCounts || []).filter(c=> c.date!==dk);
+  r.dailyCounts.push({ date:dk, qty:q, at:nowIso(), note:'' });
+  r.dailyCounts.sort((a, b)=> a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  r.pendingDates = (r.pendingDates||[]).filter(x=> x!==dk);
+  if(r.status === 'done') r.pendingCount = false;
+  else { r.pendingCount = r.pendingDates.length > 0; if(r.pendingCount) r.overnightDate = r.pendingDates[0]; else delete r.overnightDate; }
+  r.qty = recordTotalQty(r);
+  save(); renderRecords(); renderSummary();
+  toast(`${r.machineId}　${qmDayLabel(dk)} の個数を ${q.toLocaleString()}個 にしました`,'success');
+}
+async function okQtyMiss(id, dk){
+  const r = store.records.find(x=> x.id===id); if(!r) return;
+  const ok = await confirmDialog('まとめて入れた', `${r.machineId}　${r.partNo||''}\n${qmDayLabel(dk)} の個数は、他の日にまとめて入れてありますか？\n（この一覧から消します。個数は変わりません）`, 'まとめて入れた');
+  if(!ok) return;
+  const list = new Set(appSetting().qtyOk || []); list.add(id + '|' + dk);
+  setSetting('qtyOk', [...list]);
+  renderRecords();
+  toast('一覧から消しました');
+}
 function recMissingQty(r){
   if(r.status!=='done') return false;
   if((r.pendingDates||[]).length > 0) return true;                       // 個数を入れずに終了した日が残っている
@@ -4133,9 +4247,11 @@ function renderRecords(){
 
   let recs = base.slice();
   if(recMachine!=='all') recs = recs.filter(r=>r.machineId===recMachine);
-  const missingCount = recs.filter(recMissingQty).length;
-  if(mb) mb.innerHTML = `個数未入力のみ${missingCount?`<span class="n">${missingCount}</span>`:''}`;
-  if(recMissingOnly) recs = recs.filter(recMissingQty);
+  let qm = qtyMissList();
+  updateRecTabBadge();
+  if(recMachine!=='all') qm = qm.filter(x=> x.r.machineId===recMachine);
+  if(mb) mb.innerHTML = `個数の入れ忘れ${qm.length?`<span class="n">${qm.length}</span>`:''}`;
+  if(recMissingOnly){ list.innerHTML = renderQtyMiss(qm); return; }
 
   if(!recs.length){
     list.innerHTML = `<div class="rec-empty-note">${recMissingOnly?'個数未入力の記録はありません':'この期間の記録はありません'}</div>` + olderRecordsBtn();
@@ -7457,7 +7573,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.103';
+const APP_VERSION = '2026-06-28.104';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
