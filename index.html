@@ -484,6 +484,17 @@
   .qm-act input{width:120px;padding:9px 10px;border:1.5px solid var(--stop);border-radius:8px;font-family:var(--mono);font-size:15px;font-weight:700;}
   .qm-act .qm-save{padding:9px 14px;border:none;border-radius:8px;background:var(--orange);color:#fff;font-family:var(--sans);font-size:13px;font-weight:800;}
   .qm-act .qm-ok{margin-left:auto;padding:9px 11px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink2);font-family:var(--sans);font-size:12px;font-weight:700;}
+  .qs-box{flex:1;min-width:0;}
+  .qs-src{display:block;font-size:12.5px;font-weight:700;color:var(--ink2);margin-bottom:8px;}
+  .qs-src select{display:block;width:100%;margin-top:4px;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:14px;font-family:var(--sans);font-weight:700;color:var(--ink);}
+  .qs-row{display:flex;align-items:center;gap:8px;margin:5px 0;}
+  .qs-box .qs-row span{flex:0 0 118px;font-family:var(--mono);font-size:13.5px;font-weight:800;color:var(--ink);}
+  .qs-box .qs-row span b{margin-left:5px;font-family:var(--sans);font-size:10.5px;color:var(--stop-d);}
+  .qs-row.miss input{border:1.5px solid var(--stop);background:var(--surface);}
+  .qs-row.src input{background:var(--pause-bg);border-color:#ecd7a6;color:var(--pause-d);}
+  .qs-row.src span::after{content:'から引く';margin-left:5px;font-family:var(--sans);font-size:10.5px;color:var(--pause-d);}
+  .qs-sum{margin-top:8px;font-size:13px;font-weight:700;color:var(--ink2);}
+  .qs-sum .qs-bad{color:var(--stop-d);}
   /* 記録タブ：1行一覧 */
   .rrow{
     display:flex;align-items:center;gap:9px;width:100%;text-align:left;
@@ -4126,7 +4137,7 @@ function recRange(){
    その記録が QTY_MISS_MIN 分以上動いていた日なのに、その日の個数が入っていない日を並べる（直近 QTY_MISS_DAYS 日）。
    ・動いている作業の今日の分は出さない（夕方に入れるため）。終了した作業は今日の分も出す
    ・土日祝（実績なし）・休止の日は出さない
-   ・「まとめて入れた」を押した日は出さない（設定 qtyOk に 記録id|日付 を覚える） */
+   ・何日か分を1日にまとめて入れてある時は「合計から分ける」で日ごとに分ける（合計は変えない） */
 const QTY_MISS_DAYS = 30, QTY_MISS_MIN = 30;
 function recRunMinOnDay(r, day){
   const rs = new Date(r.startTime).getTime(), re = endRefT(r);
@@ -4145,7 +4156,6 @@ let _qmCache = { ver:-1, day:'', list:[] };
 function qtyMissList(){
   const today = dateKey(nowDate());
   if(_qmCache.ver === dataVer && _qmCache.day === today) return _qmCache.list;
-  const ok = new Set(appSetting().qtyOk || []);
   const cut = nowDate(); cut.setHours(0,0,0,0); cut.setDate(cut.getDate() - QTY_MISS_DAYS);
   const out = [];
   store.records.forEach(r=>{
@@ -4159,7 +4169,7 @@ function qtyMissList(){
     for(; dateKey(d) <= endK; d.setDate(d.getDate()+1)){
       const dk = dateKey(d);
       if(dk === today && r.status !== 'done') continue;
-      if(have.has(dk) || ok.has(r.id + '|' + dk)) continue;
+      if(have.has(dk)) continue;
       if(offDay(d) || isShutdown(d, r.machineId)) continue;
       const min = recRunMinOnDay(r, new Date(d));
       if(min >= QTY_MISS_MIN) out.push({ r, dk, min });
@@ -4177,7 +4187,7 @@ function updateRecTabBadge(){
 }
 function qmDayLabel(dk){ const d = new Date(dk + 'T00:00:00'); return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`; }
 function renderQtyMiss(list){
-  const note = `<div class="qm-note">動いていたのに、その日の個数が入っていない日です（直近${QTY_MISS_DAYS}日）。<br>個数を入れて「入れる」を押してください。作っていない日は <b>0</b> を入れます。<br>他の日にまとめて入れてある時は「まとめて入れた」を押すと、一覧から消えます（個数は変わりません）。</div>`;
+  const note = `<div class="qm-note">動いていたのに、その日の個数が入っていない日です（直近${QTY_MISS_DAYS}日）。<br>個数を入れて「入れる」を押してください。作っていない日は <b>0</b> を入れます。<br>何日か分を他の日にまとめて入れてある時は「合計から分ける」で、日ごとに分けられます（合計は変わりません）。</div>`;
   if(!list.length) return note + `<div class="rec-empty-note">個数の入れ忘れはありません 👍</div>`;
   return note + list.map(x=>{
     const id = esc(x.r.id), dcs = (x.r.dailyCounts||[]).filter(c=> (c.qty||0) > 0);
@@ -4188,7 +4198,7 @@ function renderQtyMiss(list){
       <div class="qm-act">
         <input type="number" inputmode="numeric" min="0" placeholder="個数" onfocus="rememberRecById('qtyday:${id}', '${id}')" onkeydown="if(event.key==='Enter') saveQtyMiss('${id}','${x.dk}', this)">
         <button class="qm-save" onclick="saveQtyMiss('${id}','${x.dk}', this.previousElementSibling)">入れる</button>
-        <button class="qm-ok" onclick="okQtyMiss('${id}','${x.dk}')">まとめて入れた</button>
+        ${dcs.length ? `<button class="qm-ok" onclick="splitQtyMiss('${id}','${x.dk}')">合計から分ける</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -4203,24 +4213,85 @@ async function saveQtyMiss(id, dk, input){
   delete sheetBase['qtyday:'+id];
   if(!chk.ok){ renderRecords(); return; }
   const r = chk.cur;
-  r.dailyCounts = (r.dailyCounts || []).filter(c=> c.date!==dk);
-  r.dailyCounts.push({ date:dk, qty:q, at:nowIso(), note:'' });
-  r.dailyCounts.sort((a, b)=> a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
-  r.pendingDates = (r.pendingDates||[]).filter(x=> x!==dk);
-  if(r.status === 'done') r.pendingCount = false;
-  else { r.pendingCount = r.pendingDates.length > 0; if(r.pendingCount) r.overnightDate = r.pendingDates[0]; else delete r.overnightDate; }
-  r.qty = recordTotalQty(r);
+  setDayCounts(r, { [dk]: q });
   save(); renderRecords(); renderSummary();
   toast(`${r.machineId}　${qmDayLabel(dk)} の個数を ${q.toLocaleString()}個 にしました`,'success');
 }
-async function okQtyMiss(id, dk){
-  const r = store.records.find(x=> x.id===id); if(!r) return;
-  const ok = await confirmDialog('まとめて入れた', `${r.machineId}　${r.partNo||''}\n${qmDayLabel(dk)} の個数は、他の日にまとめて入れてありますか？\n（この一覧から消します。個数は変わりません）`, 'まとめて入れた');
-  if(!ok) return;
-  const list = new Set(appSetting().qtyOk || []); list.add(id + '|' + dk);
-  setSetting('qtyOk', [...list]);
-  renderRecords();
-  toast('一覧から消しました');
+/* 他の日にまとめて入れてある個数を、日ごとに分ける（合計は変えない）。
+   入っていない日の個数を入れると、「引く日」の個数が 合計−ほかの日 に自動でなる */
+let qsState = null;
+function qsRecalc(){
+  if(!qsState) return;
+  const sel = $('#qsSrc'); if(!sel) return;
+  const src = sel.value, vals = {};
+  let others = 0;
+  document.querySelectorAll('.qs-row input').forEach(i=>{
+    const d = i.dataset.d, isSrc = d === src;
+    i.readOnly = isSrc; i.closest('.qs-row').classList.toggle('src', isSrc);
+    if(!isSrc){ const v = i.value.trim(); vals[d] = v === '' ? null : parseInt(v, 10); if(vals[d] > 0) others += vals[d]; }
+  });
+  const left = qsState.total - others;
+  const si = $('#qs-' + src); if(si) si.value = left;
+  vals[src] = left;
+  qsState.src = src; qsState.vals = vals; qsState.bad = left < 0;
+  const sum = $('#qsSum');
+  if(sum) sum.innerHTML = left < 0
+    ? `<span class="qs-bad">${qmDayLabel(src)} の個数が足りません（${(-left).toLocaleString()}個 多い）</span>`
+    : `合計 <b>${qsState.total.toLocaleString()}個</b>（変わりません）`;
+}
+async function splitQtyMiss(id, dk){
+  const r0 = store.records.find(x=> x.id===id); if(!r0) return;
+  const dc = r0.dailyCounts || [];
+  const srcs = dc.filter(c=> (c.qty||0) > 0).map(c=> c.date).sort();
+  if(!srcs.length){ toast('この作業には、分けられる個数が入っていません','error'); return; }
+  rememberRecById('qtysplit:'+id, id);
+  const miss = qtyMissList().filter(x=> x.r.id===id).map(x=> x.dk);
+  const days = [...new Set(dc.map(c=> c.date).concat(miss))].sort();
+  const cur = d=>{ const c = dc.find(x=> x.date===d); return c ? (c.qty||0) : null; };
+  const defSrc = srcs.find(d=> d > dk) || srcs[srcs.length-1];
+  const total = recordTotalQty(r0);
+  qsState = { total, src:defSrc, vals:{}, bad:false };
+  const html = `<div class="qs-box">
+      <label class="qs-src">どの日の個数から分けますか
+        <select id="qsSrc" onchange="qsRecalc()">${srcs.map(d=> `<option value="${d}"${d===defSrc?' selected':''}>${qmDayLabel(d)}（今 ${cur(d).toLocaleString()}個）</option>`).join('')}</select></label>
+      ${days.map(d=> `<div class="qs-row${miss.includes(d)?' miss':''}"><span>${qmDayLabel(d)}${miss.includes(d)?'<b>未入力</b>':''}</span><input type="number" inputmode="numeric" min="0" id="qs-${d}" data-d="${d}" value="${cur(d) ?? ''}" placeholder="個数" oninput="qsRecalc()"></div>`).join('')}
+      <div class="qs-sum" id="qsSum"></div>
+    </div>`;
+  const p = askWithInput('合計から日ごとに分ける',
+    `${r0.machineId}　${r0.partNo||''}\nこの作業の合計 ${total.toLocaleString()}個 を、日ごとに分けます。\n入っていない日の個数を入れると、選んだ日の個数から自動で引きます。`,
+    '分ける', 'やめる', html);
+  qsRecalc();
+  setTimeout(()=>{ const i = $('#qs-' + dk); if(i) try{ i.focus(); }catch(e){} }, 300);
+  const a = await p;
+  const st = qsState; qsState = null;
+  if(a.v !== 'ok' || !st){ delete sheetBase['qtysplit:'+id]; return; }
+  if(st.bad){ delete sheetBase['qtysplit:'+id]; toast('分けた個数が合計より多くなっています。もう一度やり直してください','error'); return; }
+  // 入れた日だけ変える（空のままの日は、入っていないまま）
+  const set = {};
+  Object.entries(st.vals).forEach(([d, q])=>{ if(q !== null && !isNaN(q) && q !== cur(d)) set[d] = q; });
+  if(!Object.keys(set).length){ delete sheetBase['qtysplit:'+id]; toast('変わったところはありません'); return; }
+  const chk = await checkRecConflict('qtysplit:'+id, id, (x, c)=> canonJson(x.dailyCounts||[])===canonJson(c.dailyCounts||[]) && canonJson(x.pendingDates||[])===canonJson(c.pendingDates||[]),
+    Object.entries(set).map(([d, q])=> `${qmDayLabel(d)} ${q.toLocaleString()}個`).join('・'));
+  delete sheetBase['qtysplit:'+id];
+  if(!chk.ok){ renderRecords(); return; }
+  const r = chk.cur;
+  setDayCounts(r, set);
+  save(); renderRecords(); renderSummary();
+  toast(`${r.machineId} を日ごとに分けました（合計 ${recordTotalQty(r).toLocaleString()}個）`,'success');
+}
+// 日ごとの個数をまとめて入れる（その日の「未入力」の印も外す）
+function setDayCounts(r, set){
+  const at = nowIso();
+  r.dailyCounts = (r.dailyCounts || []).slice();
+  Object.entries(set).forEach(([d, q])=>{
+    const c = r.dailyCounts.find(x=> x.date===d);
+    if(c) c.qty = q; else r.dailyCounts.push({ date:d, qty:q, at, note:'' });
+  });
+  r.dailyCounts.sort((a, b)=> a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  r.pendingDates = (r.pendingDates||[]).filter(x=> !(x in set));
+  if(r.status === 'done') r.pendingCount = false;
+  else { r.pendingCount = r.pendingDates.length > 0; if(r.pendingCount) r.overnightDate = r.pendingDates[0]; else delete r.overnightDate; }
+  r.qty = recordTotalQty(r);
 }
 function recMissingQty(r){
   if(r.status!=='done') return false;
@@ -7573,7 +7644,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.104';
+const APP_VERSION = '2026-06-28.105';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
