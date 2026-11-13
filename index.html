@@ -925,7 +925,7 @@
   .stk .now{font-family:var(--mono);font-weight:900;font-size:20px;color:#7a5600;}
   .stk .now small{font-size:12px;font-weight:700;color:var(--ink3);margin-left:2px;}
   .stk .over{color:var(--stop);font-weight:800;font-size:12.5px;}
-  .pool-head .stk-add{margin-left:auto;padding:9px 13px;}
+  .pool-head .btn-add.stk-add{margin-left:auto;padding:11px 16px;}
   .stk-empty{font-size:12.5px;color:var(--ink3);font-weight:600;padding:6px 2px;}
   .as-box{flex:1;min-width:0;display:flex;flex-direction:column;gap:9px;}
   .as-box label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:700;color:var(--ink2);}
@@ -1136,7 +1136,7 @@
     <div class="pool" id="planPoolOther" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
   </div>
   <div id="planStockWrap" hidden>
-    <div class="pool-head"><span class="t">🟨 在庫</span><span class="s" id="planStockSub"></span><button class="btn-out stk-add" onclick="addStockManual()">＋ 今ある在庫を入れる</button></div>
+    <div class="pool-head"><span class="t">🟨 在庫</span><span class="s" id="planStockSub"></span><button class="btn-add stk-add" onclick="addStockManual()">＋ 今ある在庫を入れる</button></div>
     <div class="stock-list" id="planStock"></div>
   </div>
   <div class="kakou-info" id="kakouInfo"></div>
