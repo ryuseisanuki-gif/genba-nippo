@@ -925,6 +925,12 @@
   .stk .now{font-family:var(--mono);font-weight:900;font-size:20px;color:#7a5600;}
   .stk .now small{font-size:12px;font-weight:700;color:var(--ink3);margin-left:2px;}
   .stk .over{color:var(--stop);font-weight:800;font-size:12.5px;}
+  .pool-head .stk-add{margin-left:auto;padding:9px 13px;}
+  .stk-empty{font-size:12.5px;color:var(--ink3);font-weight:600;padding:6px 2px;}
+  .as-box{flex:1;min-width:0;display:flex;flex-direction:column;gap:9px;}
+  .as-box label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:700;color:var(--ink2);}
+  .as-box label small{font-weight:600;color:var(--ink3);}
+  .as-box select{background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:9px;font-size:14px;font-family:var(--sans);font-weight:700;color:var(--ink);}
   .stk .mx{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--ink2);}
   .stk .mx input{width:96px;padding:6px 8px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--mono);font-weight:800;font-size:14px;}
   .stk .sub{font-size:12px;color:var(--ink3);font-weight:600;}
@@ -1130,7 +1136,7 @@
     <div class="pool" id="planPoolOther" ondragover="planPoolOver(event)" ondragleave="planPoolLeave(event)" ondrop="planPoolDrop(event)"></div>
   </div>
   <div id="planStockWrap" hidden>
-    <div class="pool-head"><span class="t">🟨 在庫</span><span class="s" id="planStockSub"></span></div>
+    <div class="pool-head"><span class="t">🟨 在庫</span><span class="s" id="planStockSub"></span><button class="btn-out stk-add" onclick="addStockManual()">＋ 今ある在庫を入れる</button></div>
     <div class="stock-list" id="planStock"></div>
   </div>
   <div class="kakou-info" id="kakouInfo"></div>
@@ -3838,7 +3844,7 @@ async function askWithInput(title, msg, okLabel, cancelLabel, inputHtml, altLabe
   const inp = box && box.querySelector('input');
   const val = inp ? inp.value : '';
   const vals = {};
-  if(box) box.querySelectorAll('input').forEach(i=>{ if(i.id) vals[i.id] = i.value; });
+  if(box) box.querySelectorAll('input,select').forEach(i=>{ if(i.id) vals[i.id] = i.value; });
   if(box) box.remove();
   return { v, val, vals };
 }
@@ -7145,6 +7151,12 @@ function stockNameList(){
     const cur = m.get(n);
     if(!cur || (o.createdAt||'') > (cur.createdAt||'')) m.set(n, o);
   });
+  // 「今ある在庫を入れる」で入れた在庫（まだ黄色のバーで作っていない名前も出す。材料は入れた時のもの）
+  Object.entries(stockInfoDoc().items || {}).forEach(([n, it])=>{
+    n = String(n||'').trim();
+    if(!n || !it || !it.manual || m.has(n)) return;
+    m.set(n, { stock:true, stockName:n, partNo:n, coilId:it.coilId || null, createdAt:it.at || '' });
+  });
   return [...m.entries()].sort((a,b)=> (b[1].createdAt||'') < (a[1].createdAt||'') ? -1 : 1).map(([name, o])=> ({ name, o }));
 }
 function osRenderStockNames(){
@@ -7238,15 +7250,60 @@ async function fixStockCount(name){
   save(); renderPlanStock();
   toast(`${name}：在庫を ${n.toLocaleString()}個 に直しました`, 'success');
 }
+/* 今ある在庫を入れる（黄色のバーで作っていない在庫も、名前・材料・個数で入れられる）。
+   settings/stockInfo の items[名前] に { manual:true, coilId, at, adj, max, log } で持つ。もうある名前なら数を直す */
+async function addStockManual(){
+  const grp = coilAssigned() ? planGroupOf(planMachine) : null;
+  const coils = store.coils || [];
+  const defCoil = grp && grp.coils.length ? grp.coils[0] : (coils[0] && coils[0].id) || '';
+  const names = stockNameList();
+  let v = { asName:'', asCoil:defCoil, asQty:'', asMax:'' };
+  for(;;){
+    const a = await askWithInput('今ある在庫を入れる',
+      '今ある在庫の名前・材料・個数を入れてください。\n黄色のバーで在庫を作る時と同じ名前にすると、作り終えた分が足されます。',
+      '入れる', 'やめる',
+      `<div class="as-box">
+        <label>在庫の名前<input type="text" id="asName" list="asNameList" placeholder="例 棚柱1820 在庫" value="${esc(v.asName)}"></label>
+        <datalist id="asNameList">${names.map(x=> `<option value="${esc(x.name)}">`).join('')}</datalist>
+        <label>材料（コイル）<small>受注で「在庫を使う」と出す時に、同じ材料かを見分けます</small>
+          <select id="asCoil">${coils.map(c=> `<option value="${esc(c.id)}"${c.id===v.asCoil?' selected':''}>${esc(c.name)}</option>`).join('')}<option value=""${!v.asCoil?' selected':''}>（決めない）</option></select></label>
+        <label>今ある個数<input type="number" id="asQty" inputmode="numeric" min="0" placeholder="個" value="${esc(v.asQty)}"></label>
+        <label>最大在庫<small>入れなくてもいいです</small><input type="number" id="asMax" inputmode="numeric" min="0" placeholder="なし" value="${esc(v.asMax)}"></label>
+      </div>`);
+    if(a.v !== 'ok') return;
+    v = Object.assign(v, a.vals);
+    const name = String(v.asName||'').trim(), q = String(v.asQty||'').trim();
+    if(!name){ toast('在庫の名前を入れてください','error'); continue; }
+    if(!/^\d+$/.test(q)){ toast('今ある個数を入れてください（0以上）','error'); continue; }
+    break;
+  }
+  const name = String(v.asName).trim(), qty = parseInt(v.asQty, 10), max = parseInt(v.asMax, 10);
+  const had = stockNameList().some(x=> x.name===name);
+  const c = stockCount(name);
+  const d = stockInfoDoc(true), it = d.items[name] || (d.items[name] = {});
+  if(!had){ it.manual = true; it.at = nowIso(); }
+  if(it.manual) it.coilId = v.asCoil || null;
+  if(qty !== c.now){
+    it.adj = (it.adj || 0) + (qty - c.now);
+    it.log = (it.log || []).concat([{ at:nowIso(), d:qty - c.now, to:qty }]).slice(-20);
+  }
+  if(max > 0) it.max = max;
+  save(); renderPlanStock();
+  toast(had ? `「${name}」は前からある在庫なので、数を ${qty.toLocaleString()}個 に直しました` : `在庫「${name}」を ${qty.toLocaleString()}個 で入れました`, 'success');
+}
 function renderPlanStock(){
   const wrap = $('#planStockWrap'); if(!wrap) return;
   // 材料ごとに分けている時は、いま見ている機械のまとまりの材料（コイル）の在庫だけ出す（材料の決まっていない在庫はどこでも出す）
   const grp = coilAssigned() ? planGroupOf(planMachine) : null;
   const list = stockNameList().filter(x=> (isStock(x.o) || stockCount(x.name).made || stockItem(x.name).max || stockItem(x.name).adj) &&
     (!grp || !x.o.coilId || grp.coils.includes(x.o.coilId)));
-  wrap.hidden = !list.length;
-  if(!list.length) return;
+  wrap.hidden = false;
   const gn = grp ? planGroupCoilNames(grp) : [];
+  if(!list.length){
+    $('#planStockSub').textContent = '';
+    $('#planStock').innerHTML = `<div class="stk-empty">${gn.length ? esc(gn.join('・')) + ' の' : ''}在庫はまだありません。今ある在庫は「＋ 今ある在庫を入れる」で入れられます。</div>`;
+    return;
+  }
   $('#planStockSub').textContent = `${gn.length ? gn.join('・') + ' の在庫 ' : ''}${list.length}件・在庫のまま作り終えた個数から、受注で使った数を引いたもの（途中で受注に切り替えた分は入りません）`;
   $('#planStock').innerHTML = list.map(x=>{
     const c = stockCount(x.name), nm = esc(x.name);
@@ -7255,7 +7312,7 @@ function renderPlanStock(){
       <span class="now">${c.now.toLocaleString()}<small>個</small></span>
       ${c.over ? `<span class="over">⚠ 最大を ${(c.now - c.max).toLocaleString()}個 超えています</span>` : ''}
       <label class="mx">最大在庫<input type="number" inputmode="numeric" min="0" value="${c.max || ''}" placeholder="なし" data-n="${nm}" onchange="setStockMax(this.dataset.n, this.value)">個</label>
-      <span class="sub">${['作った ' + c.made.toLocaleString() + '個', c.used ? '受注に使った ' + c.used.toLocaleString() + '個' : '', c.running ? '作業中 ' + c.running + '件' : '', c.planned ? '予定 ' + c.planned + '件' : ''].filter(Boolean).join('・')}</span>
+      <span class="sub">${[(c.made || !stockItem(x.name).adj) ? '作った ' + c.made.toLocaleString() + '個' : '', stockItem(x.name).adj ? (stockItem(x.name).manual && !c.made ? '入れた・直した ' : '手で直した ') + (stockItem(x.name).adj > 0 ? '+' : '') + stockItem(x.name).adj.toLocaleString() + '個' : '', c.used ? '受注に使った ' + c.used.toLocaleString() + '個' : '', c.running ? '作業中 ' + c.running + '件' : '', c.planned ? '予定 ' + c.planned + '件' : ''].filter(Boolean).join('・')}</span>
       <button type="button" data-n="${nm}" onclick="fixStockCount(this.dataset.n)">数を直す</button>
     </div>`;
   }).join('');
@@ -7591,7 +7648,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.106';
+const APP_VERSION = '2026-06-28.107';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
