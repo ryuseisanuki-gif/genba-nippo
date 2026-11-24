@@ -2476,7 +2476,9 @@ function overnightFor(id){ return pickRec(store.records.filter(r=>r.machineId===
 function activeFor(id){ return pickRec(store.records.filter(r=>r.machineId===id && (r.status==='running'||r.status==='stopped'||r.status==='overnight'))); }
 function openStop(r){ return r && r.stops ? r.stops.find(s=>!s.to) : null; }
 function openStops(r){ return (r && r.stops) ? r.stops.filter(s=>!s.to) : []; }
-function closeAllOpenStops(r, iso){ let n=0; openStops(r).forEach(s=>{ s.to = iso; n++; }); return n; }
+// 開いている停止を全部閉じる。休憩の停止は、休憩がもう終わっていれば休憩の終わる時刻（12:45・15:15）で閉じる
+//（2026-11-16：15:15〜16:55 にどこもアプリを開いておらず、夕方の締めで 3時の休憩が 16:55 まで続いたことになった）
+function closeAllOpenStops(r, iso){ return closeOpenStopsAt(r, iso); }
 // 休憩の停止なら、その休憩の終わる時刻（12:45・15:15 など）。休憩でなければ null
 function breakEndOf(st){
   if(!st || st.reason!=='休憩' || !st.from) return null;
@@ -3474,7 +3476,7 @@ function processAutoDaily(){
       const rd = new Date(r.startTime); rd.setHours(0,0,0,0);
       if(rd.getTime() < today.getTime()){
         const end = stdEnd(rd);
-        const os = openStop(r); if(os) os.to = end.toISOString();
+        closeOpenStopsAt(r, end.toISOString());
         r.endTime = end.toISOString();
         r.status = 'done';
         changed = true;
@@ -3502,7 +3504,7 @@ function processAutoDaily(){
       // 17:00以降：今日の自動記録を終了（個数は後から手入力）
       todays.forEach(r=>{
         if(r.status==='running' || r.status==='stopped'){
-          const os = openStop(r); if(os) os.to = seventeen.toISOString();
+          closeOpenStopsAt(r, seventeen.toISOString());
           r.endTime = seventeen.toISOString();
           r.status = 'done';
           changed = true;
@@ -7648,7 +7650,7 @@ function setupOverlayDismiss(){
 
 /* ===== INIT ===== */
 /* ===== 自動アップデート確認（古いキャッシュのまま使い続けるのを防ぐ） ===== */
-const APP_VERSION = '2026-06-28.107';
+const APP_VERSION = '2026-06-28.108';
 let updateLatest = null;
 function showVerStatus(latest, err){
   const el = $('#verLatest'); if(!el) return;
